@@ -110,7 +110,7 @@ def handle_update(update):
         # /start, /help
         if text in ("/start", "/help"):
             welcome = (
-                "🤖 <b>Amarseba SMS Bot</b>\n\n"
+                "🤖 <b>SAKIB CUSTOM SMS BOT</b>\n\n"
                 "SMS পাঠাতে:\n"
                 "<code>01712345678 আপনার মেসেজ</code>\n\n"
                 "<b>কমান্ড:</b>\n"
@@ -134,7 +134,7 @@ def handle_update(update):
                 if status == 200 and data.get("success"):
                     d = data["data"]
                     tg_send(chat_id,
-                        "✅ <b>Amarseba OK</b>\n\n"
+                        "✅ <b>BOT OK</b>\n\n"
                         f"💰 ব্যালেন্স: {d.get('balance')} {d.get('currency')}\n"
                         f"📌 স্ট্যাটাস: {d.get('status')}"
                     )
