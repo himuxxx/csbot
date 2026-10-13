@@ -1,5 +1,5 @@
 """
-Amarseba SMS Telegram Bot — Vercel Webhook Version
+Amarseba SMS Telegram Bot — Vercel Webhook (FIXED)
 """
 import uuid
 import requests
@@ -49,9 +49,7 @@ def amarseba_send(phone, body):
     h["Idempotency-Key"] = str(uuid.uuid4())
     r = requests.post(
         f"{AMARSEBA_BASE_URL}/bulk-sms/send",
-        headers=h,
-        json={"to": phone, "body": body},
-        timeout=60,
+        headers=h, json={"to": phone, "body": body}, timeout=60,
     )
     try:
         return r.status_code, r.json()
@@ -75,7 +73,7 @@ def is_valid_phone(p):
     return c.isdigit() and 10 <= len(c) <= 14
 
 
-# ---------------- Webhook handler ----------------
+# ---------------- Update handler ----------------
 def handle_update(update):
     message = update.get("message") or update.get("edited_message")
     if not message:
@@ -83,38 +81,35 @@ def handle_update(update):
 
     chat_id = message["chat"]["id"]
     text = (message.get("text") or "").strip()
-
     if not text:
         return
 
-    # ============ /start, /help ============
+    # /start, /help
     if text in ("/start", "/help"):
         welcome = (
             "🤖 <b>Amarseba SMS Bot</b>\n\n"
             "SMS পাঠাতে এই ফরম্যাটে মেসেজ দিন:\n"
             "<code>01712345678 আপনার মেসেজ</code>\n\n"
-            "<b>অথবা কমান্ড দিয়ে:</b>\n"
-            "<code>/send 01712345678 আপনার মেসেজ</code>\n\n"
-            "<b>অন্য কমান্ড:</b>\n"
-            "• /balance — ব্যালেন্স চেক\n"
-            "• /id — আপনার chat ID দেখুন\n\n"
-            "📌 প্রথম শব্দটি নম্বর, বাকিটা মেসেজ।"
+            "<b>কমান্ড:</b>\n"
+            "• /send 01712345678 মেসেজ\n"
+            "• /balance — ব্যালেন্স\n"
+            "• /id — chat ID"
         )
         tg_send(chat_id, welcome)
         return
 
-    # ============ /id ============
+    # /id
     if text == "/id":
         tg_send(chat_id, f"🆔 আপনার chat ID: <code>{chat_id}</code>")
         return
 
-    # ============ /balance ============
+    # /balance
     if text == "/balance":
         tg_typing(chat_id)
         try:
             status, data = amarseba_balance()
         except Exception as e:
-            tg_send(chat_id, f"⚠️ Network error: {e}")
+            tg_send(chat_id, f"⚠️ Network error: <code>{e}</code>")
             return
 
         if status == 200 and data.get("success"):
@@ -127,7 +122,7 @@ def handle_update(update):
             tg_send(chat_id, f"❌ {data.get('message', 'Error')}")
         return
 
-    # ============ Send SMS ============
+    # Send SMS
     payload_text = text
     if text.startswith("/send"):
         payload_text = text[5:].strip()
@@ -156,10 +151,7 @@ def handle_update(update):
     try:
         status, data = amarseba_send(phone, body)
     except Exception as e:
-        tg_send(chat_id,
-            f"⚠️ Network error:\n<code>{e}</code>\n\n"
-            "ISP ব্লক হলে VPN লাগবে।"
-        )
+        tg_send(chat_id, f"⚠️ Network error:\n<code>{e}</code>")
         return
 
     if status in (200, 201, 202) and data.get("success"):
@@ -181,15 +173,34 @@ def handle_update(update):
         )
 
 
-# ==================== Flask Routes ====================
-@app.route("/", methods=["GET"])
-def home():
-    return jsonify({"status": "ok", "bot": "Amarseba SMS Bot", "mode": "webhook"})
+# ==================== Routes ====================
+@app.route("/", methods=["GET", "POST"])
+def root():
+    if request.method == "POST":
+        update = request.get_json(silent=True) or {}
+        try:
+            handle_update(update)
+        except Exception as e:
+            print(f"handle_update error: {e}")
+        return jsonify({"ok": True})
+    return jsonify({"status": "ok", "bot": "Amarseba SMS Bot"})
+
+
+@app.route("/webhook", methods=["GET", "POST"])
+@app.route("/api/webhook", methods=["GET", "POST"])
+def webhook():
+    if request.method == "POST":
+        update = request.get_json(silent=True) or {}
+        try:
+            handle_update(update)
+        except Exception as e:
+            print(f"handle_update error: {e}")
+        return jsonify({"ok": True})
+    return jsonify({"status": "ok", "endpoint": "webhook"})
 
 
 @app.route("/set-webhook", methods=["GET"])
 def set_webhook():
-    """একবার ব্রাউজারে খুললেই webhook সেট হবে।"""
     host = request.host_url.rstrip("/")
     webhook_url = f"{host}/webhook"
     try:
@@ -205,7 +216,6 @@ def set_webhook():
 
 @app.route("/webhook-info", methods=["GET"])
 def webhook_info():
-    """বর্তমান webhook তথ্য দেখুন।"""
     try:
         r = requests.get(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getWebhookInfo",
@@ -216,16 +226,16 @@ def webhook_info():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/webhook", methods=["POST"])
-@app.route("/api/webhook", methods=["POST"])
-def webhook():
-    update = request.get_json(silent=True) or {}
+@app.route("/delete-webhook", methods=["GET"])
+def delete_webhook():
     try:
-        handle_update(update)
+        r = requests.get(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteWebhook",
+            timeout=20,
+        )
+        return jsonify(r.json())
     except Exception as e:
-        print(f"handle_update error: {e}")
-    # Telegram কে সবসময় 200 দিতে হবে
-    return jsonify({"ok": True})
+        return jsonify({"error": str(e)}), 500
 
 
 # লোকাল টেস্টের জন্য
