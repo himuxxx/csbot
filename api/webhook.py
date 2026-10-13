@@ -8,7 +8,7 @@ import cloudscraper
 from flask import Flask, request, jsonify
 
 # ==================== CONFIG ====================
-TELEGRAM_BOT_TOKEN = "8896805760:AAGt4CDbEdGP_Xedc9p_SpFu4d7rA3QOOSE"
+TELEGRAM_BOT_TOKEN = "8896805760:AAG6RwWbL1wXiuF3gI88ehNw42oE4DJ_1CE"
 AMARSEBA_API_KEY   = "sk-ams-live-Xqoc4Aley0GyV8XbzXjZCdReeePqOrpYSjNP0Cc5k8pnFLLh"
 AMARSEBA_BASE_URL  = "https://e-amarseba.com/api/v1"
 # ================================================
