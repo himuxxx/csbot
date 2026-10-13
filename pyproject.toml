@@ -5,6 +5,7 @@ requires-python = ">=3.12"
 dependencies = [
     "Flask==3.0.3",
     "requests==2.32.3",
+    "cloudscraper==1.2.71",
 ]
 
 [tool.vercel]
