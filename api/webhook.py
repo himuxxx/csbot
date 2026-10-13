@@ -1,9 +1,10 @@
 """
-Amarseba SMS Telegram Bot — Vercel Webhook (DEBUG VERSION)
+Amarseba SMS Telegram Bot — Vercel Webhook + Cloudflare Bypass
 """
 import uuid
 import traceback
 import requests
+import cloudscraper
 from flask import Flask, request, jsonify
 
 # ==================== CONFIG ====================
@@ -20,6 +21,11 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
+# Cloudflare bypass scraper
+scraper = cloudscraper.create_scraper(
+    browser={"browser": "chrome", "platform": "windows", "desktop": True}
+)
+
 
 # ---------------- Telegram helpers ----------------
 def tg_send(chat_id, text, parse_mode="HTML"):
@@ -29,7 +35,7 @@ def tg_send(chat_id, text, parse_mode="HTML"):
             json={"chat_id": chat_id, "text": text, "parse_mode": parse_mode},
             timeout=20,
         )
-        print(f"tg_send status={r.status_code} body={r.text[:200]}")
+        print(f"tg_send status={r.status_code}")
         return r
     except Exception as e:
         print(f"tg_send error: {e}")
@@ -47,20 +53,20 @@ def tg_typing(chat_id):
         print(f"tg_typing error: {e}")
 
 
-# ---------------- Amarseba helpers ----------------
+# ---------------- Amarseba helpers (Cloudflare bypass) ----------------
 def amarseba_send(phone, body):
     h = HEADERS.copy()
     h["Idempotency-Key"] = str(uuid.uuid4())
     try:
-        r = requests.post(
+        r = scraper.post(
             f"{AMARSEBA_BASE_URL}/bulk-sms/send",
             headers=h, json={"to": phone, "body": body}, timeout=50,
         )
-        print(f"amarseba_send status={r.status_code} body={r.text[:300]}")
+        print(f"amarseba_send status={r.status_code} body={r.text[:200]}")
         try:
             return r.status_code, r.json()
         except Exception:
-            return r.status_code, {"success": False, "message": r.text}
+            return r.status_code, {"success": False, "message": r.text[:300]}
     except Exception as e:
         print(f"amarseba_send EXCEPTION: {e}")
         return 0, {"success": False, "message": str(e)}
@@ -68,15 +74,15 @@ def amarseba_send(phone, body):
 
 def amarseba_balance():
     try:
-        r = requests.get(
+        r = scraper.get(
             f"{AMARSEBA_BASE_URL}/wallet/balance",
             headers=HEADERS, timeout=20,
         )
-        print(f"amarseba_balance status={r.status_code} body={r.text[:300]}")
+        print(f"amarseba_balance status={r.status_code} body={r.text[:200]}")
         try:
             return r.status_code, r.json()
         except Exception:
-            return r.status_code, {"success": False, "message": r.text}
+            return r.status_code, {"success": False, "message": r.text[:300]}
     except Exception as e:
         print(f"amarseba_balance EXCEPTION: {e}")
         return 0, {"success": False, "message": str(e)}
@@ -92,7 +98,6 @@ def handle_update(update):
     try:
         message = update.get("message") or update.get("edited_message")
         if not message:
-            print(f"No message in update: {update}")
             return
 
         chat_id = message["chat"]["id"]
@@ -124,7 +129,6 @@ def handle_update(update):
         # /debug
         if text == "/debug":
             tg_typing(chat_id)
-            # Test Amarseba
             try:
                 status, data = amarseba_balance()
                 if status == 200 and data.get("success"):
@@ -138,7 +142,7 @@ def handle_update(update):
                     tg_send(chat_id,
                         f"❌ <b>Amarseba fail</b>\n"
                         f"HTTP: {status}\n"
-                        f"Response: <code>{str(data)[:300]}</code>"
+                        f"<code>{str(data)[:300]}</code>"
                     )
             except Exception as e:
                 tg_send(chat_id, f"⚠️ Exception: <code>{e}</code>")
@@ -195,9 +199,7 @@ def handle_update(update):
         try:
             status, data = amarseba_send(phone, body)
         except Exception as e:
-            tg_send(chat_id,
-                f"⚠️ Network error:\n<code>{e}</code>"
-            )
+            tg_send(chat_id, f"⚠️ Network error:\n<code>{e}</code>")
             return
 
         if status in (200, 201, 202) and data.get("success"):
@@ -297,7 +299,6 @@ def delete_webhook():
 # ==================== Debug Endpoints ====================
 @app.route("/test-telegram", methods=["GET"])
 def test_telegram():
-    """Vercel থেকে Telegram-এ পৌঁছানো যাচ্ছে কি না টেস্ট।"""
     try:
         r = requests.get(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMe",
@@ -310,9 +311,9 @@ def test_telegram():
 
 @app.route("/test-amarseba", methods=["GET"])
 def test_amarseba():
-    """Vercel থেকে Amarseba API-তে পৌঁছানো যাচ্ছে কি না টেস্ট।"""
+    """Cloudflare bypass scraper দিয়ে টেস্ট।"""
     try:
-        r = requests.get(
+        r = scraper.get(
             f"{AMARSEBA_BASE_URL}/wallet/balance",
             headers=HEADERS, timeout=30,
         )
@@ -331,7 +332,7 @@ def test_amarseba():
             "ok": False,
             "error_class": e.__class__.__name__,
             "error": str(e),
-            "hint": "Vercel থেকে Amarseba API-তে পৌঁছানো যাচ্ছে না",
+            "hint": "cloudscraper দিয়ে চেষ্টা করেও পৌঁছানো যাচ্ছে না",
         }), 500
 
 
