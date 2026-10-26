@@ -1,6 +1,6 @@
 """
 Amarseba SMS Telegram Bot — Vercel
-Hardcoded admins + optional jsonblob persistence (no env needed)
+Hardcoded admins + kvdb.io persistence (no env needed)
 """
 import uuid
 import traceback
@@ -13,11 +13,11 @@ TELEGRAM_BOT_TOKEN = "8896805760:AAFYDVaKzleuPINa0AjlBSsrbBR8IytO3S0"
 AMARSEBA_API_KEY_DEFAULT = "sk-ams-live-Xqoc4Aley0GyV8XbzXjZCdReeePqOrpYSjNP0Cc5k8pnFLLh"
 AMARSEBA_BASE_URL = "https://e-amarseba.com/api/v1"
 
-# ✅ Admin chat_id গুলোর তালিকা (একাধিক হলে comma দিয়ে, কিন্তু list আকারে)
+# ✅ Admin chat_id গুলোর তালিকা
 ADMIN_CHAT_IDS = ["6552783238", "1700797877"]
 
-# jsonblob.com থেকে পাওয়া ID এখানে বসান (না থাকলে খালি রাখুন)
-BLOB_ID = "01a1787a-f60f-7213-b13a-76ca75406b90"   # ex: "01a1787a-f60f-7213-b13a-76ca75406b90"
+# 📦 kvdb.io বাকেট আইডি (URL: https://kvdb.io/TNfP9yGjAgAAdk7PQtvFuK/)
+BLOB_ID = "TNfP9yGjAgAAdk7PQtvFuK"
 # ================================================
 
 app = Flask(__name__)
@@ -29,9 +29,9 @@ scraper = cloudscraper.create_scraper(
 _memory_key = {"value": None}
 
 
-# ---------------- jsonblob storage ----------------
-def _blob_url():
-    return f"https://jsonblob.com/api/jsonBlob/{BLOB_ID}"
+# ---------------- kvdb.io storage ----------------
+def _blob_url(key="api_key"):
+    return f"https://kvdb.io/{BLOB_ID}/{key}"
 
 
 def blob_read():
@@ -39,8 +39,10 @@ def blob_read():
         return None
     try:
         r = requests.get(_blob_url(), timeout=10)
+        print(f"blob_read HTTP {r.status_code} body={r.text[:80]}")
         if r.status_code == 200:
-            return (r.json() or {}).get("api_key") or None
+            val = r.text.strip()
+            return val if val else None
     except Exception as e:
         print(f"blob_read error: {e}")
     return None
@@ -50,16 +52,31 @@ def blob_write(api_key):
     if not BLOB_ID:
         return False
     try:
-        r = requests.put(
+        r = requests.post(
             _blob_url(),
-            json={"api_key": api_key},
-            headers={"Content-Type": "application/json"},
+            data=api_key,
+            headers={"Content-Type": "text/plain"},
             timeout=10,
         )
-        return r.status_code in (200, 204)
+        print(f"blob_write HTTP {r.status_code} body={r.text[:80]}")
+        return r.status_code in (200, 201, 204)
     except Exception as e:
         print(f"blob_write error: {e}")
         return False
+
+
+def blob_test():
+    if not BLOB_ID:
+        return {"ok": False, "reason": "BLOB_ID খালি"}
+    try:
+        r = requests.get(_blob_url(), timeout=10)
+        return {
+            "ok": r.status_code == 200,
+            "http_status": r.status_code,
+            "content": r.text[:200],
+        }
+    except Exception as e:
+        return {"ok": False, "reason": str(e)}
 
 
 # ---------------- Key management ----------------
@@ -87,7 +104,6 @@ def clear_api_key():
 
 
 def is_admin(chat_id):
-    """একাধিক admin সাপোর্ট করে।"""
     return str(chat_id) in ADMIN_CHAT_IDS
 
 
@@ -199,7 +215,7 @@ def handle_update(update):
                     "\n<b>👑 Admin কমান্ড:</b>\n"
                     "• /setkey &lt;api_key&gt; — API key সেট\n"
                     "• /delkey — key মুছুন\n"
-                    "• /setup-blob — persistent storage তৈরি\n"
+                    "• /blob-test — storage টেস্ট\n"
                 )
             tg_send(chat_id, base)
             return
@@ -207,6 +223,25 @@ def handle_update(update):
         # ---------- /id ----------
         if text == "/id":
             tg_send(chat_id, f"🆔 chat ID: <code>{chat_id}</code>")
+            return
+
+        # ---------- /blob-test (ADMIN ONLY) ----------
+        if text == "/blob-test":
+            if not is_admin(chat_id):
+                tg_send(chat_id, "⛔ শুধুমাত্র admin।")
+                return
+            result = blob_test()
+            if result.get("ok"):
+                tg_send(chat_id,
+                    "✅ <b>Storage OK</b>\n\n"
+                    f"🆔 Bucket: <code>{BLOB_ID}</code>\n"
+                    f"📄 Value: <code>{(result.get('content') or '(খালি)')[:50]}</code>"
+                )
+            else:
+                tg_send(chat_id,
+                    f"❌ <b>Storage fail</b>\n\n"
+                    f"Reason: <code>{result.get('reason', 'unknown')}</code>"
+                )
             return
 
         # ---------- /setkey (ADMIN ONLY) ----------
@@ -232,17 +267,20 @@ def handle_update(update):
             if where == "blob":
                 tg_send(chat_id,
                     "✅ <b>API key সেভ হয়েছে (persistent)</b>\n\n"
-                    f"<code>{mask_key(new_key)}</code>"
+                    f"<code>{mask_key(new_key)}</code>\n\n"
+                    f"📦 Bucket: <code>{BLOB_ID}</code>\n"
+                    "🔒 Cold start হলেও থাকবে।"
                 )
             else:
                 tg_send(chat_id,
                     "⚠️ <b>API key শুধু memory-তে সেভ হয়েছে</b>\n\n"
                     f"<code>{mask_key(new_key)}</code>\n\n"
-                    "⏱️ Vercel cold start হলে (~১৫-৩০ মিনিট) এটা মুছে যাবে।\n\n"
-                    "💡 স্থায়ীভাবে সেভ করতে:\n"
-                    "1. <code>/setup-blob</code> কমান্ড দিন\n"
-                    "2. পাওয়া BLOB_ID কোডে <code>BLOB_ID</code> লাইনে বসান\n"
-                    "3. Redeploy করুন"
+                    "⏱️ Vercel cold start হলে (~১৫-৩০ মিনিট) মুছে যাবে।\n\n"
+                    "💡 স্থায়ী করতে:\n"
+                    "1. kvdb.io-তে বাকেট তৈরি করুন\n"
+                    "2. URL থেকে ID কপি করুন\n"
+                    "3. কোডে <code>BLOB_ID = \"...\"</code> বসান\n"
+                    "4. Redeploy করুন"
                 )
             return
 
@@ -255,41 +293,6 @@ def handle_update(update):
             tg_send(chat_id, "🗑️ API key মুছে ফেলা হয়েছে। এখন default ব্যবহার হবে।")
             return
 
-        # ---------- /setup-blob (ADMIN ONLY) ----------
-        if text == "/setup-blob":
-            if not is_admin(chat_id):
-                tg_send(chat_id, "⛔ শুধুমাত্র admin।")
-                return
-            try:
-                r = requests.post(
-                    "https://jsonblob.com/api/jsonBlob",
-                    json={"api_key": ""},
-                    headers={
-                        "Content-Type": "application/json",
-                        "Accept": "application/json",
-                    },
-                    timeout=15,
-                )
-                loc = r.headers.get("Location", "")
-                blob_id = loc.rstrip("/").split("/")[-1] if loc else ""
-                if not blob_id:
-                    tg_send(chat_id,
-                        f"❌ Blob তৈরি হয়নি\nHTTP: {r.status_code}\n"
-                        f"<code>{r.text[:200]}</code>"
-                    )
-                    return
-                tg_send(chat_id,
-                    "✅ <b>BLOB তৈরি হয়েছে</b>\n\n"
-                    f"BLOB_ID: <code>{blob_id}</code>\n\n"
-                    "<b>এখন কী করবেন:</b>\n"
-                    f"1. <code>api/webhook.py</code>-এ <code>BLOB_ID = \"{blob_id}\"</code> বসান\n"
-                    "2. <code>git push</code> → Vercel redeploy\n"
-                    "3. তারপর /setkey দিন — স্থায়ীভাবে সেভ হবে"
-                )
-            except Exception as e:
-                tg_send(chat_id, f"⚠️ Exception: <code>{e}</code>")
-            return
-
         # ---------- /debug ----------
         if text == "/debug":
             tg_typing(chat_id)
@@ -298,12 +301,14 @@ def handle_update(update):
                 if status == 200 and data.get("success"):
                     d = data["data"]
                     src = "blob" if blob_read() else ("memory" if _memory_key["value"] else "default")
+                    storage_status = "✅ Connected" if BLOB_ID else "❌ BLOB_ID খালি"
                     tg_send(chat_id,
                         "✅ <b>BOT OK</b>\n\n"
                         f"💰 ব্যালেন্স: {d.get('balance')} {d.get('currency')}\n"
                         f"📌 স্ট্যাটাস: {d.get('status')}\n"
                         f"🔑 Key: <code>{mask_key(get_api_key())}</code>\n"
                         f"📦 Source: {src}\n"
+                        f"🗄️ Storage: {storage_status}\n"
                         f"👑 Admin: {'হ্যাঁ' if is_admin(chat_id) else 'না'}"
                     )
                 else:
@@ -405,6 +410,7 @@ def root():
         "admins": ADMIN_CHAT_IDS,
         "admin_configured": len(ADMIN_CHAT_IDS) > 0,
         "blob_configured": bool(BLOB_ID),
+        "blob_id": BLOB_ID,
     })
 
 
@@ -419,6 +425,15 @@ def webhook():
             print(f"webhook POST error: {e}")
         return jsonify({"ok": True})
     return jsonify({"status": "ok", "endpoint": "webhook"})
+
+
+@app.route("/blob-info", methods=["GET"])
+def blob_info():
+    return jsonify({
+        "blob_configured": bool(BLOB_ID),
+        "blob_id": BLOB_ID,
+        "test": blob_test(),
+    })
 
 
 @app.route("/set-webhook", methods=["GET"])
