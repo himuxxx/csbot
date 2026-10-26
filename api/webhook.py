@@ -1,6 +1,6 @@
 """
 Amarseba SMS Telegram Bot — Vercel
-Hardcoded admin + optional jsonblob persistence (no env needed)
+Hardcoded admins + optional jsonblob persistence (no env needed)
 """
 import uuid
 import traceback
@@ -13,11 +13,10 @@ TELEGRAM_BOT_TOKEN = "8896805760:AAFYDVaKzleuPINa0AjlBSsrbBR8IytO3S0"
 AMARSEBA_API_KEY_DEFAULT = "sk-ams-live-Xqoc4Aley0GyV8XbzXjZCdReeePqOrpYSjNP0Cc5k8pnFLLh"
 AMARSEBA_BASE_URL = "https://e-amarseba.com/api/v1"
 
-# ⚠️ আপনার Telegram chat_id এখানে বসান (শুধু সংখ্যা, যেমন "123456789")
-ADMIN_CHAT_ID = "6552783238,1700797877"
+# ✅ Admin chat_id গুলোর তালিকা (একাধিক হলে comma দিয়ে, কিন্তু list আকারে)
+ADMIN_CHAT_IDS = ["6552783238", "1700797877"]
 
 # jsonblob.com থেকে পাওয়া ID এখানে বসান (না থাকলে খালি রাখুন)
-# খালি রাখলে /setkey শুধু ১৫-৩০ মিনিট (warm instance) পর্যন্ত থাকে
 BLOB_ID = ""   # ex: "1234567890123456789"
 # ================================================
 
@@ -27,7 +26,6 @@ scraper = cloudscraper.create_scraper(
     browser={"browser": "chrome", "platform": "windows", "desktop": True}
 )
 
-# In-memory fallback (শুধু warm instance-এ থাকে)
 _memory_key = {"value": None}
 
 
@@ -89,7 +87,8 @@ def clear_api_key():
 
 
 def is_admin(chat_id):
-    return str(chat_id) == str(ADMIN_CHAT_ID)
+    """একাধিক admin সাপোর্ট করে।"""
+    return str(chat_id) in ADMIN_CHAT_IDS
 
 
 def get_headers():
@@ -199,7 +198,8 @@ def handle_update(update):
                 base += (
                     "\n<b>👑 Admin কমান্ড:</b>\n"
                     "• /setkey &lt;api_key&gt; — API key সেট\n"
-                    "• /delkey — key মুছুন (default-এ ফিরবে)\n"
+                    "• /delkey — key মুছুন\n"
+                    "• /setup-blob — persistent storage তৈরি\n"
                 )
             tg_send(chat_id, base)
             return
@@ -212,7 +212,10 @@ def handle_update(update):
         # ---------- /setkey (ADMIN ONLY) ----------
         if text.startswith("/setkey"):
             if not is_admin(chat_id):
-                tg_send(chat_id, "⛔ শুধুমাত্র admin API key সেট করতে পারবে।")
+                tg_send(chat_id,
+                    "⛔ শুধুমাত্র admin API key সেট করতে পারবে।\n\n"
+                    f"আপনার chat_id: <code>{chat_id}</code>"
+                )
                 return
 
             parts = text.split(None, 1)
@@ -229,8 +232,7 @@ def handle_update(update):
             if where == "blob":
                 tg_send(chat_id,
                     "✅ <b>API key সেভ হয়েছে (persistent)</b>\n\n"
-                    f"<code>{mask_key(new_key)}</code>\n\n"
-                    "এখন /balance দিয়ে টেস্ট করুন।"
+                    f"<code>{mask_key(new_key)}</code>"
                 )
             else:
                 tg_send(chat_id,
@@ -301,7 +303,8 @@ def handle_update(update):
                         f"💰 ব্যালেন্স: {d.get('balance')} {d.get('currency')}\n"
                         f"📌 স্ট্যাটাস: {d.get('status')}\n"
                         f"🔑 Key: <code>{mask_key(get_api_key())}</code>\n"
-                        f"📦 Source: {src}"
+                        f"📦 Source: {src}\n"
+                        f"👑 Admin: {'হ্যাঁ' if is_admin(chat_id) else 'না'}"
                     )
                 else:
                     tg_send(chat_id,
@@ -399,7 +402,8 @@ def root():
     return jsonify({
         "status": "ok",
         "bot": "SAKIB CUSTOM SMS BOT",
-        "admin_configured": ADMIN_CHAT_ID != "PASTE_YOUR_CHAT_ID_HERE",
+        "admins": ADMIN_CHAT_IDS,
+        "admin_configured": len(ADMIN_CHAT_IDS) > 0,
         "blob_configured": bool(BLOB_ID),
     })
 
