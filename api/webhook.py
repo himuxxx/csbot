@@ -1,6 +1,6 @@
 """
 Amarseba SMS Telegram Bot — Vercel
-Hardcoded admins + kvdb.io persistence (no env needed)
+Hardcoded admins + Telegram pinned-message storage (no external service)
 """
 import uuid
 import traceback
@@ -13,11 +13,11 @@ TELEGRAM_BOT_TOKEN = "8896805760:AAFYDVaKzleuPINa0AjlBSsrbBR8IytO3S0"
 AMARSEBA_API_KEY_DEFAULT = "sk-ams-live-Xqoc4Aley0GyV8XbzXjZCdReeePqOrpYSjNP0Cc5k8pnFLLh"
 AMARSEBA_BASE_URL = "https://e-amarseba.com/api/v1"
 
-# ✅ Admin chat_id গুলোর তালিকা
+# ✅ Admin chat_id তালিকা — সবচেয়ে প্রথম জনের chat-এ key সেভ হবে
 ADMIN_CHAT_IDS = ["6552783238", "1700797877"]
 
-# 📦 kvdb.io বাকেট আইডি (URL: https://kvdb.io/TNfP9yGjAgAAdk7PQtvFuK/)
-BLOB_ID = "TNfP9yGjAgAAdk7PQtvFuK"
+# Telegram pinned message-এ key সংরক্ষণের prefix
+KEY_PREFIX = "🔑AMARSEBA_KEY::"
 # ================================================
 
 app = Flask(__name__)
@@ -29,51 +29,101 @@ scraper = cloudscraper.create_scraper(
 _memory_key = {"value": None}
 
 
-# ---------------- kvdb.io storage ----------------
-def _blob_url(key="api_key"):
-    return f"https://kvdb.io/{BLOB_ID}/{key}"
+# ---------------- Telegram-based storage ----------------
+def _storage_chat():
+    return ADMIN_CHAT_IDS[0] if ADMIN_CHAT_IDS else None
 
 
 def blob_read():
-    if not BLOB_ID:
+    chat = _storage_chat()
+    if not chat:
         return None
     try:
-        r = requests.get(_blob_url(), timeout=10)
-        print(f"blob_read HTTP {r.status_code} body={r.text[:80]}")
-        if r.status_code == 200:
-            val = r.text.strip()
-            return val if val else None
+        r = requests.get(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getChat",
+            params={"chat_id": chat},
+            timeout=15,
+        )
+        j = r.json()
+        if not j.get("ok"):
+            print(f"blob_read fail: {j}")
+            return None
+        pinned = (j.get("result") or {}).get("pinned_message") or {}
+        text = pinned.get("text", "")
+        if text.startswith(KEY_PREFIX):
+            key = text[len(KEY_PREFIX):].strip()
+            return key or None
     except Exception as e:
         print(f"blob_read error: {e}")
     return None
 
 
 def blob_write(api_key):
-    if not BLOB_ID:
+    chat = _storage_chat()
+    if not chat:
         return False
     try:
+        # পুরোনো pinned message সরান
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/unpinAllChatMessages",
+                json={"chat_id": chat},
+                timeout=10,
+            )
+        except Exception:
+            pass
+
+        # নতুন message পাঠান
         r = requests.post(
-            _blob_url(),
-            data=api_key,
-            headers={"Content-Type": "text/plain"},
-            timeout=10,
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": chat,
+                "text": f"{KEY_PREFIX}{api_key}",
+                "disable_notification": True,
+            },
+            timeout=15,
         )
-        print(f"blob_write HTTP {r.status_code} body={r.text[:80]}")
-        return r.status_code in (200, 201, 204)
+        j = r.json()
+        print(f"blob_write send: ok={j.get('ok')} status={r.status_code}")
+        if not j.get("ok"):
+            return False
+        msg_id = j["result"]["message_id"]
+
+        # Pin করুন
+        pr = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/pinChatMessage",
+            json={
+                "chat_id": chat,
+                "message_id": msg_id,
+                "disable_notification": True,
+            },
+            timeout=15,
+        )
+        pj = pr.json()
+        print(f"blob_write pin: ok={pj.get('ok')} status={pr.status_code}")
+        return pj.get("ok", False)
     except Exception as e:
         print(f"blob_write error: {e}")
         return False
 
 
 def blob_test():
-    if not BLOB_ID:
-        return {"ok": False, "reason": "BLOB_ID খালি"}
+    chat = _storage_chat()
+    if not chat:
+        return {"ok": False, "reason": "no admin configured"}
     try:
-        r = requests.get(_blob_url(), timeout=10)
+        r = requests.get(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getChat",
+            params={"chat_id": chat},
+            timeout=15,
+        )
+        j = r.json()
+        pinned = (j.get("result") or {}).get("pinned_message") or {}
         return {
-            "ok": r.status_code == 200,
-            "http_status": r.status_code,
-            "content": r.text[:200],
+            "ok": j.get("ok", False),
+            "chat_id": chat,
+            "pinned_text": pinned.get("text", "(none)")[:60],
+            "has_key": pinned.get("text", "").startswith(KEY_PREFIX),
         }
     except Exception as e:
         return {"ok": False, "reason": str(e)}
@@ -99,8 +149,16 @@ def set_api_key(new_key):
 
 def clear_api_key():
     _memory_key["value"] = None
-    if BLOB_ID:
-        blob_write("")
+    chat = _storage_chat()
+    if chat:
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/unpinAllChatMessages",
+                json={"chat_id": chat},
+                timeout=10,
+            )
+        except Exception:
+            pass
 
 
 def is_admin(chat_id):
@@ -225,7 +283,7 @@ def handle_update(update):
             tg_send(chat_id, f"🆔 chat ID: <code>{chat_id}</code>")
             return
 
-        # ---------- /blob-test (ADMIN ONLY) ----------
+        # ---------- /blob-test ----------
         if text == "/blob-test":
             if not is_admin(chat_id):
                 tg_send(chat_id, "⛔ শুধুমাত্র admin।")
@@ -234,8 +292,9 @@ def handle_update(update):
             if result.get("ok"):
                 tg_send(chat_id,
                     "✅ <b>Storage OK</b>\n\n"
-                    f"🆔 Bucket: <code>{BLOB_ID}</code>\n"
-                    f"📄 Value: <code>{(result.get('content') or '(খালি)')[:50]}</code>"
+                    f"💬 Storage chat: <code>{result.get('chat_id')}</code>\n"
+                    f"📌 Pinned: <code>{result.get('pinned_text')[:40]}</code>\n"
+                    f"🔑 Has key: {result.get('has_key')}"
                 )
             else:
                 tg_send(chat_id,
@@ -244,7 +303,7 @@ def handle_update(update):
                 )
             return
 
-        # ---------- /setkey (ADMIN ONLY) ----------
+        # ---------- /setkey ----------
         if text.startswith("/setkey"):
             if not is_admin(chat_id):
                 tg_send(chat_id,
@@ -268,7 +327,7 @@ def handle_update(update):
                 tg_send(chat_id,
                     "✅ <b>API key সেভ হয়েছে (persistent)</b>\n\n"
                     f"<code>{mask_key(new_key)}</code>\n\n"
-                    f"📦 Bucket: <code>{BLOB_ID}</code>\n"
+                    "📌 আপনার chat-এ pinned message-এ সংরক্ষিত\n"
                     "🔒 Cold start হলেও থাকবে।"
                 )
             else:
@@ -276,15 +335,14 @@ def handle_update(update):
                     "⚠️ <b>API key শুধু memory-তে সেভ হয়েছে</b>\n\n"
                     f"<code>{mask_key(new_key)}</code>\n\n"
                     "⏱️ Vercel cold start হলে (~১৫-৩০ মিনিট) মুছে যাবে।\n\n"
-                    "💡 স্থায়ী করতে:\n"
-                    "1. kvdb.io-তে বাকেট তৈরি করুন\n"
-                    "2. URL থেকে ID কপি করুন\n"
-                    "3. কোডে <code>BLOB_ID = \"...\"</code> বসান\n"
-                    "4. Redeploy করুন"
+                    "💡 Telegram pin করতে সমস্যা হচ্ছে।\n"
+                    "চেক করুন:\n"
+                    "• ADMIN_CHAT_IDS ঠিক আছে?\n"
+                    "• বটে অন্তত একবার /start দিয়েছেন?"
                 )
             return
 
-        # ---------- /delkey (ADMIN ONLY) ----------
+        # ---------- /delkey ----------
         if text == "/delkey":
             if not is_admin(chat_id):
                 tg_send(chat_id, "⛔ শুধুমাত্র admin।")
@@ -300,15 +358,15 @@ def handle_update(update):
                 status, data = amarseba_balance()
                 if status == 200 and data.get("success"):
                     d = data["data"]
-                    src = "blob" if blob_read() else ("memory" if _memory_key["value"] else "default")
-                    storage_status = "✅ Connected" if BLOB_ID else "❌ BLOB_ID খালি"
+                    src = "telegram_pin" if blob_read() else ("memory" if _memory_key["value"] else "default")
+                    storage = "✅ Telegram pinned" if blob_read() else "⚠️ pin নেই"
                     tg_send(chat_id,
                         "✅ <b>BOT OK</b>\n\n"
                         f"💰 ব্যালেন্স: {d.get('balance')} {d.get('currency')}\n"
                         f"📌 স্ট্যাটাস: {d.get('status')}\n"
                         f"🔑 Key: <code>{mask_key(get_api_key())}</code>\n"
                         f"📦 Source: {src}\n"
-                        f"🗄️ Storage: {storage_status}\n"
+                        f"🗄️ Storage: {storage}\n"
                         f"👑 Admin: {'হ্যাঁ' if is_admin(chat_id) else 'না'}"
                     )
                 else:
@@ -409,8 +467,7 @@ def root():
         "bot": "SAKIB CUSTOM SMS BOT",
         "admins": ADMIN_CHAT_IDS,
         "admin_configured": len(ADMIN_CHAT_IDS) > 0,
-        "blob_configured": bool(BLOB_ID),
-        "blob_id": BLOB_ID,
+        "storage": "telegram_pinned_message",
     })
 
 
@@ -430,8 +487,7 @@ def webhook():
 @app.route("/blob-info", methods=["GET"])
 def blob_info():
     return jsonify({
-        "blob_configured": bool(BLOB_ID),
-        "blob_id": BLOB_ID,
+        "storage_type": "telegram_pinned_message",
         "test": blob_test(),
     })
 
@@ -494,7 +550,7 @@ def test_amarseba():
             f"{AMARSEBA_BASE_URL}/wallet/balance",
             headers=get_headers(), timeout=30,
         )
-        src = "blob" if blob_read() else ("memory" if _memory_key["value"] else "default")
+        src = "telegram_pin" if blob_read() else ("memory" if _memory_key["value"] else "default")
         try:
             return jsonify({
                 "http_status": r.status_code,
