@@ -17,7 +17,7 @@ AMARSEBA_BASE_URL = "https://e-amarseba.com/api/v1"
 ADMIN_CHAT_IDS = ["6552783238", "1700797877"]
 
 # jsonblob.com থেকে পাওয়া ID এখানে বসান (না থাকলে খালি রাখুন)
-BLOB_ID = ""   # ex: "01a1787a-f60f-7213-b13a-76ca75406b90"
+BLOB_ID = "01a1787a-f60f-7213-b13a-76ca75406b90"   # ex: "01a1787a-f60f-7213-b13a-76ca75406b90"
 # ================================================
 
 app = Flask(__name__)
