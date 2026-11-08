@@ -1,7 +1,8 @@
 """
 Amarseba SMS Telegram Bot — Vercel
-On-demand status check via button + English UI
+Auto Processing → Sent status (1.5s) + English UI
 """
+import time
 import uuid
 import traceback
 import requests
@@ -29,7 +30,6 @@ scraper = cloudscraper.create_scraper(
 )
 
 _memory_key = {"value": None}
-_memory_batches = {}   # batch_id -> {phone, cost, balance_after, status}
 
 
 # ============================================================
@@ -287,23 +287,19 @@ def kb_admin():
     }
 
 
-def kb_sms(batch_id=None):
-    rows = []
-    if batch_id:
-        rows.append([
-            {"text": "🔄 Check Status", "callback_data": f"st:{batch_id}"},
-            {"text": "🏠 Home", "callback_data": "home"},
-        ])
-    else:
-        rows.append([
-            {"text": "🏠 Home", "callback_data": "home"},
-            {"text": "💰 Balance", "callback_data": "balance"},
-        ])
-    rows.append([
-        {"text": "📖 Help", "callback_data": "help"},
-        {"text": "👨‍💻 Developer", "url": DEV_LINK},
-    ])
-    return {"inline_keyboard": rows}
+def kb_sms():
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🏠 Home", "callback_data": "home"},
+                {"text": "💰 Balance", "callback_data": "balance"},
+            ],
+            [
+                {"text": "📖 Help", "callback_data": "help"},
+                {"text": "👨‍💻 Developer", "url": DEV_LINK},
+            ],
+        ]
+    }
 
 
 # ============================================================
@@ -374,18 +370,16 @@ def msg_processing():
 
 def status_display(st):
     s = str(st or "").lower()
-    if s in ("sent", "delivered"):
+    if s in ("sent", "delivered", "success"):
         return "✅", "Sent"
     if s == "failed":
         return "❌", "Failed"
-    if s == "sending":
-        return "🔄", "Sending"
     if s == "refunded":
         return "💸", "Refunded"
-    return "⏳", "Queued"
+    return "⏳", "Processing"
 
 
-def msg_sms_sent(phone, status="queued", cost=None, balance_after=None):
+def msg_sms_details(phone, status="processing", cost=None, balance_after=None):
     emoji, label = status_display(status)
     lines = [
         f"📨 <b>SMS Details</b>\n",
@@ -473,7 +467,7 @@ def amarseba_batch(batch_id):
     try:
         r = scraper.get(
             f"{AMARSEBA_BASE_URL}/bulk-sms/batches/{batch_id}",
-            headers=get_headers(), timeout=15,
+            headers=get_headers(), timeout=12,
         )
         try:
             return r.status_code, r.json()
@@ -484,17 +478,17 @@ def amarseba_batch(batch_id):
 
 
 def extract_status(batch_data):
+    """Extract overall status from batch response."""
     if not isinstance(batch_data, dict):
-        return "queued"
+        return None
     st = batch_data.get("status")
     if st:
         return str(st).lower()
     counts = batch_data.get("counts") or {}
     if isinstance(counts, dict) and counts:
         def _i(k):
-            v = counts.get(k, 0)
             try:
-                return int(v)
+                return int(counts.get(k, 0))
             except Exception:
                 return 0
         sent = _i("sent")
@@ -507,7 +501,7 @@ def extract_status(batch_data):
                 return "sent" if sent > 0 else "failed"
             if sending > 0 or sent > 0:
                 return "sending"
-    return "queued"
+    return None
 
 
 def is_valid_phone(p):
@@ -696,63 +690,42 @@ def cmd_send_sms(chat_id, phone, body):
 
     d = data.get("data", {}) or {}
     batch_id = d.get("batch_id", "")
-    initial_status = d.get("status", "queued")
+    cost = d.get("total_cost")
+    balance_after = d.get("balance_after")
 
-    # store batch metadata for later "Check Status" clicks
-    if batch_id:
-        _memory_batches[batch_id] = {
-            "phone": phone,
-            "cost": d.get("total_cost"),
-            "balance_after": d.get("balance_after"),
-            "status": initial_status,
-        }
-
-    text = msg_sms_sent(
-        phone,
-        status=initial_status,
-        cost=d.get("total_cost"),
-        balance_after=d.get("balance_after"),
+    # Step 1: Show Processing
+    proc_text = msg_sms_details(
+        phone, status="processing", cost=cost, balance_after=balance_after,
     )
-    kb = kb_sms(batch_id if batch_id else None)
-
     if proc_id:
-        tg_edit(chat_id, proc_id, text, reply_markup=kb)
+        tg_edit(chat_id, proc_id, proc_text, reply_markup=kb_sms())
     else:
-        tg_send(chat_id, text, reply_markup=kb)
+        proc_id = tg_send_and_get_id(chat_id, proc_text, reply_markup=kb_sms())
 
+    # Step 2: Wait 1.5s, check batch, then show final status
+    final_status = "sent"   # assume success since 202 was returned
+    if batch_id:
+        try:
+            time.sleep(1.5)
+            st_code, st_resp = amarseba_batch(batch_id)
+            if st_code == 200 and st_resp.get("success"):
+                bd = st_resp.get("data", {}) or {}
+                extracted = extract_status(bd)
+                if str(extracted).lower() == "failed":
+                    final_status = "failed"
+                elif str(extracted).lower() in ("sent", "delivered"):
+                    final_status = "sent"
+                # anything else → assume sent (202 accepted)
+        except Exception as e:
+            print(f"batch status check error: {e}")
 
-def check_status_and_edit(chat_id, message_id, batch_id):
-    """Fetch batch status and update the SMS details message."""
-    meta = _memory_batches.get(batch_id, {})
-    phone = meta.get("phone", "-")
-    cost = meta.get("cost")
-    balance_after = meta.get("balance_after")
-
-    status_code, resp = amarseba_batch(batch_id)
-    if status_code == 200 and resp.get("success"):
-        bd = resp.get("data", {}) or {}
-        new_status = extract_status(bd)
-    else:
-        new_status = meta.get("status", "queued")
-
-    _memory_batches[batch_id] = {
-        "phone": phone,
-        "cost": cost,
-        "balance_after": balance_after,
-        "status": new_status,
-    }
-
-    # decide whether to keep the check-status button
-    is_final = str(new_status).lower() in ("sent", "failed", "delivered", "refunded")
-    kb = kb_sms(None if is_final else batch_id)
-
-    text = msg_sms_sent(
-        phone,
-        status=new_status,
-        cost=cost,
-        balance_after=balance_after,
+    final_text = msg_sms_details(
+        phone, status=final_status, cost=cost, balance_after=balance_after,
     )
-    tg_edit(chat_id, message_id, text, reply_markup=kb)
+    if proc_id:
+        tg_edit(chat_id, proc_id, final_text, reply_markup=kb_sms())
+    else:
+        tg_send(chat_id, final_text, reply_markup=kb_sms())
 
 
 # ============================================================
@@ -819,13 +792,6 @@ def handle_callback(cq):
                     msg_error(status, resp),
                     reply_markup=kb_admin(),
                 )
-
-        elif data.startswith("st:"):
-            # check status for a specific batch
-            batch_id = data[3:]
-            if not batch_id:
-                return
-            check_status_and_edit(chat_id, message_id, batch_id)
 
     except Exception as e:
         print(f"handle_callback error: {e}")
