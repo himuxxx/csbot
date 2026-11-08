@@ -1,11 +1,12 @@
 """
 Amarseba SMS Telegram Bot — Vercel
-Bot ON/OFF toggle (admin) + auto Processing→Sent + English UI
+Bot ON/OFF + User tracking + auto Processing→Sent
 """
 import time
 import json
 import uuid
 import traceback
+from datetime import datetime, timezone
 import requests
 import cloudscraper
 from flask import Flask, request, jsonify
@@ -17,9 +18,11 @@ AMARSEBA_BASE_URL = "https://e-amarseba.com/api/v1"
 
 ADMIN_CHAT_IDS = ["6552783238", "1700797877"]
 
-# Storage: one pinned message holds JSON state
 STORE_PREFIX = "🔑AMARSEBA_STATE::"
 LEGACY_KEY_PREFIX = "🔑AMARSEBA_KEY::"
+
+# Pinned message 4096 char limit — safe threshold
+MAX_USERS_INLINE = 200
 
 DEV_NAME = "SHAKIB"
 DEV_LINK = "https://t.me/shakib2016"
@@ -33,19 +36,26 @@ scraper = cloudscraper.create_scraper(
     browser={"browser": "chrome", "platform": "windows", "desktop": True}
 )
 
-# In-memory fallback (per warm instance)
-_memory_state = {"api_key": None, "bot_on": True}
+_memory_state = {
+    "api_key": None,
+    "bot_on": True,
+    "users": {},
+    "user_count": 0,
+}
 
 
 # ============================================================
-# TELEGRAM-BASED STORAGE (JSON in pinned message)
+# TELEGRAM-BASED STORAGE
 # ============================================================
 def _storage_chat():
     return ADMIN_CHAT_IDS[0] if ADMIN_CHAT_IDS else None
 
 
+def _blank_state():
+    return {"api_key": "", "bot_on": True, "users": {}, "user_count": 0}
+
+
 def state_read():
-    """Read {api_key, bot_on} from pinned message."""
     chat = _storage_chat()
     if not chat:
         return None
@@ -65,19 +75,25 @@ def state_read():
             except Exception:
                 data = {}
             return {
-                "api_key": (data.get("api_key") or None),
+                "api_key": data.get("api_key") or None,
                 "bot_on": bool(data.get("bot_on", True)),
+                "users": data.get("users") or {},
+                "user_count": int(data.get("user_count", 0) or 0),
             }
         if text.startswith(LEGACY_KEY_PREFIX):
             k = text[len(LEGACY_KEY_PREFIX):].strip()
-            return {"api_key": (k or None), "bot_on": True}
+            return {
+                "api_key": (k or None),
+                "bot_on": True,
+                "users": {},
+                "user_count": 0,
+            }
     except Exception as e:
         print(f"state_read error: {e}")
     return None
 
 
 def state_write(state):
-    """Write {api_key, bot_on} to pinned message."""
     chat = _storage_chat()
     if not chat:
         return False
@@ -89,15 +105,24 @@ def state_write(state):
             )
         except Exception:
             pass
+
+        users = state.get("users") or {}
+        # If too many users, trim oldest to fit into pinned message
+        if len(users) > MAX_USERS_INLINE:
+            items = sorted(users.items(), key=lambda kv: kv[1])
+            users = dict(items[-MAX_USERS_INLINE:])
+
         payload = {
             "api_key": state.get("api_key") or "",
             "bot_on": bool(state.get("bot_on", True)),
+            "user_count": int(state.get("user_count", 0) or 0),
+            "users": users,
         }
         r = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
             json={
                 "chat_id": chat,
-                "text": f"{STORE_PREFIX}{json.dumps(payload)}",
+                "text": f"{STORE_PREFIX}{json.dumps(payload, separators=(',', ':'))}",
                 "disable_notification": True,
             }, timeout=15,
         )
@@ -120,46 +145,96 @@ def state_write(state):
 
 
 # ============================================================
-# KEY + STATE MANAGEMENT
+# STATE HELPERS
 # ============================================================
-def get_api_key():
+def _current_state():
     st = state_read()
-    if st and st.get("api_key"):
+    if st is not None:
+        return st
+    return {
+        "api_key": _memory_state["api_key"],
+        "bot_on": _memory_state["bot_on"],
+        "users": _memory_state["users"],
+        "user_count": _memory_state["user_count"],
+    }
+
+
+def get_api_key():
+    st = _current_state()
+    if st.get("api_key"):
         return st["api_key"]
-    if _memory_state["api_key"]:
-        return _memory_state["api_key"]
     return AMARSEBA_API_KEY_DEFAULT
 
 
 def is_bot_on():
-    st = state_read()
-    if st is not None:
-        return bool(st.get("bot_on", True))
-    return bool(_memory_state.get("bot_on", True))
+    st = _current_state()
+    return bool(st.get("bot_on", True))
 
 
 def set_api_key(new_key):
-    st = state_read() or {"api_key": None, "bot_on": True}
+    st = _current_state()
     st["api_key"] = new_key
     _memory_state["api_key"] = new_key
-    if state_write(st):
-        return "blob"
-    return "memory"
+    return "blob" if state_write(st) else "memory"
 
 
 def clear_api_key():
-    _memory_state["api_key"] = None
-    st = state_read() or {"api_key": None, "bot_on": True}
+    st = _current_state()
     st["api_key"] = ""
+    _memory_state["api_key"] = None
     state_write(st)
 
 
 def set_bot_on(value):
-    st = state_read() or {"api_key": None, "bot_on": True}
+    st = _current_state()
     st["bot_on"] = bool(value)
     _memory_state["bot_on"] = bool(value)
-    if st.get("api_key"):
-        _memory_state["api_key"] = st["api_key"]
+    return state_write(st)
+
+
+def track_user(chat_id):
+    """Add a unique user if not seen before. Returns True if new."""
+    st = _current_state()
+    users = dict(st.get("users") or {})
+    key = str(chat_id)
+
+    # Already known?
+    if key in users:
+        return False
+
+    count = int(st.get("user_count", 0) or 0)
+
+    # Even if we can't store the ID, still increment total count
+    # (only when we can no longer fit into pinned message)
+    if len(users) < MAX_USERS_INLINE:
+        users[key] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        st["users"] = users
+    # Always increment count for genuinely new tracked user
+    # For overflow we can't know if truly new without ID; skip counting overflow
+    else:
+        # cannot verify uniqueness — skip to avoid inflating
+        return False
+
+    st["user_count"] = count + 1
+    _memory_state["users"] = users
+    _memory_state["user_count"] = st["user_count"]
+    state_write(st)
+    return True
+
+
+def get_user_stats():
+    st = _current_state()
+    users = st.get("users") or {}
+    count = int(st.get("user_count", 0) or 0)
+    return {"count": count, "users": users}
+
+
+def reset_users():
+    st = _current_state()
+    st["users"] = {}
+    st["user_count"] = 0
+    _memory_state["users"] = {}
+    _memory_state["user_count"] = 0
     return state_write(st)
 
 
@@ -279,9 +354,10 @@ def kb_admin():
             {"text": "🔍 Debug", "callback_data": "debug"},
         ],
         [
+            {"text": "📊 Users", "callback_data": "users"},
             {"text": "📖 Help", "callback_data": "help"},
-            {"text": "👨‍💻 Developer", "url": DEV_LINK},
         ],
+        [{"text": "👨‍💻 Developer", "url": DEV_LINK}],
     ]}
 
 
@@ -325,7 +401,8 @@ def msg_welcome(chat_id):
             f"  • /blob-test — Storage test\n"
             f"  • /botoff — Turn OFF bot\n"
             f"  • /boton — Turn ON bot\n"
-            f"  • /botstatus — Bot state\n\n"
+            f"  • /botstatus — Bot state\n"
+            f"  • /users — Total users\n\n"
             f"{SEP}\n"
         )
     body += f"\n👨‍💻 <b>Developer:</b> <a href=\"{DEV_LINK}\">@shakib2016</a>"
@@ -414,8 +491,10 @@ def msg_error(status, data):
 
 
 def msg_debug(chat_id, d, src):
-    storage = "✅ Telegram pinned" if state_read() else "⚠️ no pin"
+    st = state_read() or {}
+    storage = "✅ Telegram pinned" if st else "⚠️ no pin"
     bot_state = "🟢 ON" if is_bot_on() else "🔴 OFF"
+    users_count = int(st.get("user_count", 0) or 0) if st else 0
     return (
         f"🔍 <b>System Status</b>\n\n"
         f"┏━━━━━━━━━━━━━━━━━━━┓\n"
@@ -423,6 +502,7 @@ def msg_debug(chat_id, d, src):
         f"┗━━━━━━━━━━━━━━━━━━━┛\n\n"
         f"📌 Status: <b>{d.get('status', 'active').upper()}</b>\n"
         f"🤖 Bot: <b>{bot_state}</b>\n"
+        f"👥 Users: <b>{users_count}</b>\n"
         f"🔑 Key: <code>{mask_key(get_api_key())}</code>\n"
         f"📦 Source: <b>{src}</b>\n"
         f"🗄️ Storage: {storage}\n"
@@ -446,10 +526,11 @@ def msg_bot_off():
 def msg_bot_toggled(is_on, persisted):
     icon = "🟢" if is_on else "🔴"
     state = "ON" if is_on else "OFF"
-    if persisted:
-        note = "🔒 Persists across cold starts"
-    else:
-        note = "⚠️ Memory only — will reset on cold start"
+    note = (
+        "🔒 Persists across cold starts"
+        if persisted
+        else "⚠️ Memory only — will reset on cold start"
+    )
     desc = (
         "Users can now use the bot normally."
         if is_on
@@ -462,6 +543,33 @@ def msg_bot_toggled(is_on, persisted):
         f"{note}\n\n"
         f"{SEP}"
     )
+
+
+def msg_users():
+    stats = get_user_stats()
+    count = stats["count"]
+    users = stats["users"]
+
+    # Recent 10 users (sorted by date desc, using insertion order is fine)
+    recent_ids = list(users.keys())[-10:]
+
+    lines = [
+        f"👥 <b>Bot Users</b>\n",
+        f"{SEP}\n",
+        f"📊 <b>Total Users:</b> <b>{count}</b>\n",
+    ]
+
+    if recent_ids:
+        lines.append(f"\n🆕 <b>Recent (last {len(recent_ids)}):</b>")
+        for uid in reversed(recent_ids):
+            date = users.get(uid, "")
+            lines.append(f"  • <code>{uid}</code> — {date}")
+    else:
+        lines.append("\n<i>No users tracked yet.</i>")
+
+    lines.append(f"\n{SEP}")
+    lines.append(f"💡 Reset with /resetusers")
+    return "\n".join(lines)
 
 
 # ============================================================
@@ -524,10 +632,8 @@ def extract_status(batch_data):
                 return int(counts.get(k, 0))
             except Exception:
                 return 0
-        sent = _i("sent")
-        failed = _i("failed")
-        queued = _i("queued")
-        sending = _i("sending")
+        sent = _i("sent"); failed = _i("failed")
+        queued = _i("queued"); sending = _i("sending")
         total = sent + failed + queued + sending
         if total > 0:
             if sent + failed >= total:
@@ -634,11 +740,7 @@ def cmd_setkey(chat_id, new_key):
         return
 
     if not new_key:
-        tg_send(
-            chat_id,
-            f"📝 <b>Usage</b>\n\n{SEP}\n\n"
-            f"<code>/setkey sk-ams-live-...</code>",
-        )
+        tg_send(chat_id, f"📝 <b>Usage</b>\n\n{SEP}\n\n<code>/setkey sk-ams-live-...</code>")
         return
 
     if not new_key.startswith("sk-ams-"):
@@ -673,11 +775,7 @@ def cmd_delkey(chat_id):
         tg_send(chat_id, f"🔒 Admin only", reply_markup=kb_main())
         return
     clear_api_key()
-    tg_send(
-        chat_id,
-        f"🗑️ <b>API key deleted</b>\n\n{SEP}\n\n"
-        f"Now using default key",
-    )
+    tg_send(chat_id, f"🗑️ <b>API key deleted</b>\n\n{SEP}\n\nNow using default key")
 
 
 def cmd_blob_test(chat_id):
@@ -703,13 +801,11 @@ def cmd_blob_test(chat_id):
             f"💬 Chat: <code>{chat}</code>\n"
             f"📌 Pinned: <code>{ptext}</code>\n"
             f"🔑 Has key: {bool(st.get('api_key'))}\n"
-            f"🤖 Bot ON: {bool(st.get('bot_on', True))}",
+            f"🤖 Bot ON: {bool(st.get('bot_on', True))}\n"
+            f"👥 Users: {int(st.get('user_count', 0) or 0)}",
         )
     except Exception as e:
-        tg_send(
-            chat_id,
-            f"❌ <b>Storage fail</b>\n\nReason: <code>{e}</code>",
-        )
+        tg_send(chat_id, f"❌ <b>Storage fail</b>\n\nReason: <code>{e}</code>")
 
 
 def cmd_botoff(chat_id):
@@ -744,6 +840,24 @@ def cmd_botstatus(chat_id):
     )
 
 
+def cmd_users(chat_id):
+    if not is_admin(chat_id):
+        tg_send(chat_id, f"🔒 Admin only", reply_markup=kb_main())
+        return
+    tg_send(chat_id, msg_users(), reply_markup=kb_admin())
+
+
+def cmd_resetusers(chat_id):
+    if not is_admin(chat_id):
+        tg_send(chat_id, f"🔒 Admin only", reply_markup=kb_main())
+        return
+    ok = reset_users()
+    if ok:
+        tg_send(chat_id, f"🗑️ <b>User count reset</b>\n\n{SEP}\n\nTracking starts fresh.")
+    else:
+        tg_send(chat_id, f"❌ Reset failed. Try again.")
+
+
 def cmd_send_sms(chat_id, phone, body):
     if not is_valid_phone(phone):
         tg_send(
@@ -776,7 +890,6 @@ def cmd_send_sms(chat_id, phone, body):
     cost = d.get("total_cost")
     balance_after = d.get("balance_after")
 
-    # Step 1: Processing message
     proc_text = msg_sms_details(
         phone, status="processing", cost=cost, balance_after=balance_after,
     )
@@ -785,7 +898,6 @@ def cmd_send_sms(chat_id, phone, body):
     else:
         proc_id = tg_send_and_get_id(chat_id, proc_text, reply_markup=kb_sms())
 
-    # Step 2: Wait 1.5s → check batch → final status
     final_status = "sent"
     if batch_id:
         try:
@@ -820,7 +932,6 @@ def handle_callback(cq):
         message_id = cq["message"]["message_id"]
         data = cq.get("data", "")
 
-        # Bot OFF gate for non-admin
         if not is_admin(chat_id) and not is_bot_on():
             tg_answer_cb(cq_id, "🔴 Bot is OFF", show_alert=True)
             return
@@ -832,17 +943,9 @@ def handle_callback(cq):
             tg_edit(chat_id, message_id, msg_processing())
             status, resp = amarseba_balance()
             if status == 200 and resp.get("success"):
-                tg_edit(
-                    chat_id, message_id,
-                    msg_balance(resp["data"]),
-                    reply_markup=kb_balance(),
-                )
+                tg_edit(chat_id, message_id, msg_balance(resp["data"]), reply_markup=kb_balance())
             else:
-                tg_edit(
-                    chat_id, message_id,
-                    msg_error(status, resp),
-                    reply_markup=kb_main(),
-                )
+                tg_edit(chat_id, message_id, msg_error(status, resp), reply_markup=kb_main())
 
         elif data == "help":
             tg_edit(chat_id, message_id, msg_help(chat_id), reply_markup=kb_help())
@@ -850,6 +953,12 @@ def handle_callback(cq):
         elif data == "home":
             kb = kb_admin() if is_admin(chat_id) else kb_main()
             tg_edit(chat_id, message_id, msg_welcome(chat_id), reply_markup=kb)
+
+        elif data == "users":
+            if not is_admin(chat_id):
+                tg_answer_cb(cq_id, "🔒 Admin only", show_alert=True)
+                return
+            tg_edit(chat_id, message_id, msg_users(), reply_markup=kb_admin())
 
         elif data == "debug":
             if not is_admin(chat_id):
@@ -866,17 +975,9 @@ def handle_callback(cq):
                     src = "memory"
                 else:
                     src = "default"
-                tg_edit(
-                    chat_id, message_id,
-                    msg_debug(chat_id, resp["data"], src),
-                    reply_markup=kb_admin(),
-                )
+                tg_edit(chat_id, message_id, msg_debug(chat_id, resp["data"], src), reply_markup=kb_admin())
             else:
-                tg_edit(
-                    chat_id, message_id,
-                    msg_error(status, resp),
-                    reply_markup=kb_admin(),
-                )
+                tg_edit(chat_id, message_id, msg_error(status, resp), reply_markup=kb_admin())
 
     except Exception as e:
         print(f"handle_callback error: {e}")
@@ -889,7 +990,11 @@ def handle_callback(cq):
 def handle_update(update):
     try:
         if "callback_query" in update:
-            return handle_callback(update["callback_query"])
+            cq = update["callback_query"]
+            chat_id = cq["message"]["chat"]["id"]
+            # Track users who click buttons too
+            track_user(chat_id)
+            return handle_callback(cq)
 
         message = update.get("message") or update.get("edited_message")
         if not message:
@@ -902,7 +1007,10 @@ def handle_update(update):
         if not text:
             return
 
-        # Bot OFF gate (admin bypasses)
+        # Track unique user
+        track_user(chat_id)
+
+        # Bot OFF gate
         if not is_admin(chat_id) and not is_bot_on():
             tg_send(chat_id, msg_bot_off())
             return
@@ -925,6 +1033,10 @@ def handle_update(update):
             return cmd_boton(chat_id)
         if text == "/botstatus":
             return cmd_botstatus(chat_id)
+        if text == "/users":
+            return cmd_users(chat_id)
+        if text == "/resetusers":
+            return cmd_resetusers(chat_id)
         if text.startswith("/setkey"):
             arg = text[7:].strip()
             return cmd_setkey(chat_id, arg)
@@ -975,6 +1087,7 @@ def root():
         except Exception as e:
             print(f"root POST error: {e}")
         return jsonify({"ok": True})
+    stats = get_user_stats()
     return jsonify({
         "status": "ok",
         "bot": BOT_NAME,
@@ -982,6 +1095,7 @@ def root():
         "admins": ADMIN_CHAT_IDS,
         "storage": "telegram_pinned_message",
         "bot_on": is_bot_on(),
+        "user_count": stats["count"],
     })
 
 
@@ -1001,11 +1115,13 @@ def webhook():
 @app.route("/blob-info", methods=["GET"])
 def blob_info():
     st = state_read() or {}
+    stats = get_user_stats()
     return jsonify({
         "storage_type": "telegram_pinned_message",
         "chat_id": _storage_chat(),
         "has_key": bool(st.get("api_key")),
         "bot_on": bool(st.get("bot_on", True)),
+        "user_count": stats["count"],
     })
 
 
@@ -1067,7 +1183,8 @@ def test_amarseba():
             f"{AMARSEBA_BASE_URL}/wallet/balance",
             headers=get_headers(), timeout=30,
         )
-        src = "telegram_pin" if (state_read() or {}).get("api_key") else (
+        st = state_read() or {}
+        src = "telegram_pin" if st.get("api_key") else (
             "memory" if _memory_state["api_key"] else "default"
         )
         try:
@@ -1075,6 +1192,7 @@ def test_amarseba():
                 "http_status": r.status_code,
                 "key_source": src,
                 "bot_on": is_bot_on(),
+                "user_count": get_user_stats()["count"],
                 "response": r.json(),
             })
         except Exception:
