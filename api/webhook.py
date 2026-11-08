@@ -1,8 +1,8 @@
 """
 Amarseba SMS Telegram Bot — Vercel
-Ultra-level UI + Telegram pinned-message storage
-Developer: t.me/shakib2016
+Real-time status + English UI + Home button
 """
+import time
 import uuid
 import traceback
 import requests
@@ -233,8 +233,8 @@ def kb_main():
     return {
         "inline_keyboard": [
             [
-                {"text": "💰 ব্যালেন্স", "callback_data": "balance"},
-                {"text": "📖 সাহায্য", "callback_data": "help"},
+                {"text": "💰 Balance", "callback_data": "balance"},
+                {"text": "📖 Help", "callback_data": "help"},
             ],
             [
                 {"text": "👨‍💻 Developer", "url": DEV_LINK},
@@ -247,8 +247,8 @@ def kb_help():
     return {
         "inline_keyboard": [
             [
-                {"text": "💰 ব্যালেন্স", "callback_data": "balance"},
-                {"text": "🏠 হোম", "callback_data": "home"},
+                {"text": "💰 Balance", "callback_data": "balance"},
+                {"text": "🏠 Home", "callback_data": "home"},
             ],
             [
                 {"text": "👨‍💻 Developer", "url": DEV_LINK},
@@ -261,11 +261,11 @@ def kb_balance():
     return {
         "inline_keyboard": [
             [
-                {"text": "🔄 রিফ্রেশ", "callback_data": "balance"},
-                {"text": "📖 সাহায্য", "callback_data": "help"},
+                {"text": "🔄 Refresh", "callback_data": "balance"},
+                {"text": "📖 Help", "callback_data": "help"},
             ],
             [
-                {"text": "🏠 হোম", "callback_data": "home"},
+                {"text": "🏠 Home", "callback_data": "home"},
                 {"text": "👨‍💻 Developer", "url": DEV_LINK},
             ],
         ]
@@ -276,11 +276,26 @@ def kb_admin():
     return {
         "inline_keyboard": [
             [
-                {"text": "💰 ব্যালেন্স", "callback_data": "balance"},
-                {"text": "🔍 ডিবাগ", "callback_data": "debug"},
+                {"text": "💰 Balance", "callback_data": "balance"},
+                {"text": "🔍 Debug", "callback_data": "debug"},
             ],
             [
-                {"text": "📖 সাহায্য", "callback_data": "help"},
+                {"text": "📖 Help", "callback_data": "help"},
+                {"text": "👨‍💻 Developer", "url": DEV_LINK},
+            ],
+        ]
+    }
+
+
+def kb_sms():
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🏠 Home", "callback_data": "home"},
+                {"text": "💰 Balance", "callback_data": "balance"},
+            ],
+            [
+                {"text": "📖 Help", "callback_data": "help"},
                 {"text": "👨‍💻 Developer", "url": DEV_LINK},
             ],
         ]
@@ -296,22 +311,22 @@ def msg_welcome(chat_id):
         f"╔══════════════════════════╗\n"
         f"   🤖 <b>{BOT_NAME}</b> 🤖\n"
         f"╚══════════════════════════╝\n\n"
-        f"✨ <i>দ্রুত · নিরাপদ · সহজ</i> ✨\n\n"
+        f"✨ <i>Fast · Secure · Easy</i> ✨\n\n"
         f"{SEP}\n\n"
-        f"📤 <b>SMS পাঠানোর নিয়ম</b>\n\n"
-        f"<code>01712345678 আপনার মেসেজ</code>\n\n"
-        f"💡 <b>উদাহরণ:</b>\n"
-        f"<code>01712345678 হ্যালো</code>\n"
-        f"<code>01712345678 আপনার মেসেজ</code>\n\n"
+        f"📤 <b>How to Send SMS</b>\n\n"
+        f"<code>01712345678 your message</code>\n\n"
+        f"💡 <b>Examples:</b>\n"
+        f"<code>01712345678 Hello</code>\n"
+        f"<code>01712345678 Your message</code>\n\n"
         f"{SEP}\n"
     )
     if is_adm:
         body += (
-            f"\n👑 <b>Admin কমান্ড:</b>\n"
-            f"  • /setkey — API key সেট\n"
-            f"  • /delkey — key মুছুন\n"
-            f"  • /debug — সিস্টেম টেস্ট\n"
-            f"  • /blob-test — storage টেস্ট\n\n"
+            f"\n👑 <b>Admin Commands:</b>\n"
+            f"  • /setkey — Set API key\n"
+            f"  • /delkey — Delete key\n"
+            f"  • /debug — System test\n"
+            f"  • /blob-test — Storage test\n\n"
             f"{SEP}\n"
         )
     body += f"\n👨‍💻 <b>Developer:</b> <a href=\"{DEV_LINK}\">@shakib2016</a>"
@@ -320,19 +335,19 @@ def msg_welcome(chat_id):
 
 def msg_help(chat_id):
     body = (
-        f"📖 <b>বিস্তারিত গাইড</b>\n\n"
+        f"📖 <b>Detailed Guide</b>\n\n"
         f"{SEP}\n\n"
-        f"1️⃣ <b>SMS পাঠানোর নিয়ম</b>\n\n"
-        f"একটি মেসেজে এই ফরম্যাটে লিখুন:\n"
-        f"<code>01XXXXXXXXX আপনার মেসেজ</code>\n\n"
-        f"✅ <b>সঠিক উদাহরণ:</b>\n"
-        f"<code>01712345678 হ্যালো</code>\n"
-        f"<code>01712345678 আপনার মেসেজ</code>\n\n"
-        f"❌ <b>ভুল উদাহরণ:</b>\n"
-        f"<code>হ্যালো 01712345678</code> (নম্বর আগে)\n\n"
+        f"1️⃣ <b>How to Send SMS</b>\n\n"
+        f"Write in this format:\n"
+        f"<code>01XXXXXXXXX your message</code>\n\n"
+        f"✅ <b>Correct Examples:</b>\n"
+        f"<code>01712345678 Hello</code>\n"
+        f"<code>01712345678 Your message</code>\n\n"
+        f"❌ <b>Wrong Example:</b>\n"
+        f"<code>Hello 01712345678</code> (number first)\n\n"
         f"{SEP}\n\n"
-        f"❓ <b>সমস্যা হলে</b>\n\n"
-        f"ডেভেলপারের সাথে যোগাযোগ করুন:\n"
+        f"❓ <b>Having Problems?</b>\n\n"
+        f"Contact the developer:\n"
         f"👉 <a href=\"{DEV_LINK}\">@shakib2016</a>"
     )
     return body
@@ -340,38 +355,53 @@ def msg_help(chat_id):
 
 def msg_balance(d):
     return (
-        f"💰 <b>ওয়ালেট ব্যালেন্স</b>\n\n"
+        f"💰 <b>Wallet Balance</b>\n\n"
         f"┏━━━━━━━━━━━━━━━━━━━┓\n"
         f"     💵 <b>{d.get('balance')} {d.get('currency')}</b>\n"
         f"┗━━━━━━━━━━━━━━━━━━━┛\n\n"
-        f"📌 স্ট্যাটাস: <b>{d.get('status', 'active').upper()}</b>\n"
-        f"⏰ <i>রিয়েল-টাইম ডেটা</i>\n\n"
+        f"📌 Status: <b>{d.get('status', 'active').upper()}</b>\n"
+        f"⏰ <i>Real-time data</i>\n\n"
         f"{SEP}"
     )
 
 
 def msg_sms_processing():
     return (
-        f"⏳ <b>প্রসেসিং...</b>\n\n"
+        f"⏳ <b>Processing...</b>\n\n"
         f"{SEP}\n\n"
-        f"📤 SMS পাঠানো হচ্ছে\n"
-        f"⏰ অনুগ্রহ করে অপেক্ষা করুন\n\n"
+        f"📤 Sending SMS\n"
+        f"⏰ Please wait\n\n"
         f"{SEP}"
     )
 
 
-def msg_sms_sent(d, phone):
+def msg_sms_sent(d, phone, status=None):
+    raw_status = status or d.get("status", "queued")
+    st = str(raw_status).upper()
+
+    # status emoji
+    if st in ("SENT", "DELIVERED"):
+        emoji = "✅"
+        label = "Sent"
+    elif st == "FAILED":
+        emoji = "❌"
+        label = "Failed"
+    elif st == "SENDING":
+        emoji = "🔄"
+        label = "Sending"
+    else:
+        emoji = "⏳"
+        label = "Queued"
+
     lines = [
-        f"✅ <b>SMS সফলভাবে পাঠানো হয়েছে!</b>\n",
+        f"✅ <b>SMS Successfully Sent!</b>\n",
         f"┏━━━━━━━━━━━━━━━━━━━┓",
-        f"   📋 <b>বিস্তারিত</b>",
+        f"   📋 <b>Details</b>",
         f"┗━━━━━━━━━━━━━━━━━━━┛\n",
-        f"📱 প্রাপক: <code>{phone}</code>",
-        f"📊 স্ট্যাটাস: <b>{d.get('status', 'queued').upper()}</b>",
-        f"👥 প্রাপক সংখ্যা: {d.get('recipient_count', '-')}",
-        f"🧩 পার্ট: {d.get('total_parts', '-')}",
-        f"💵 খরচ: <b>{d.get('total_cost', '-')} BDT</b>",
-        f"💰 নতুন ব্যালেন্স: <b>{d.get('balance_after', '-')} BDT</b>\n",
+        f"📱 Recipient: <code>{phone}</code>",
+        f"📊 Status: {emoji} <b>{label}</b>",
+        f"💵 Cost: <b>{d.get('total_cost', '-')} BDT</b>",
+        f"💰 New Balance: <b>{d.get('balance_after', '-')} BDT</b>\n",
         f"{SEP}\n",
         f"🆔 <b>Batch ID:</b>",
         f"<code>{d.get('batch_id', '-')}</code>",
@@ -382,39 +412,39 @@ def msg_sms_sent(d, phone):
 def msg_error(status, data):
     msg = data.get("message", "Unknown error") if isinstance(data, dict) else str(data)
     return (
-        f"❌ <b>ত্রুটি ঘটেছে</b>\n\n"
+        f"❌ <b>Error Occurred</b>\n\n"
         f"{SEP}\n\n"
         f"📊 HTTP: <code>{status}</code>\n"
-        f"💬 বার্তা: <code>{msg[:200]}</code>\n\n"
+        f"💬 Message: <code>{msg[:200]}</code>\n\n"
         f"{SEP}\n\n"
-        f"🔧 সমাধান:\n"
-        f"  • নম্বর ঠিক আছে কিনা দেখুন\n"
-        f"  • ব্যালেন্স চেক করুন (/balance)\n"
-        f"  • আবার চেষ্টা করুন\n\n"
-        f"❓ সমস্যা থাকলে: @shakib2016"
+        f"🔧 Solution:\n"
+        f"  • Check if number is correct\n"
+        f"  • Check balance (/balance)\n"
+        f"  • Try again\n\n"
+        f"❓ Need help: @shakib2016"
     )
 
 
 def msg_processing():
     return (
-        f"⏳ <b>প্রসেসিং...</b>\n\n"
+        f"⏳ <b>Processing...</b>\n\n"
         f"{SEP}\n\n"
-        f"অনুগ্রহ করে অপেক্ষা করুন..."
+        f"Please wait..."
     )
 
 
 def msg_debug(chat_id, d, src):
-    storage = "✅ Telegram pinned" if blob_read() else "⚠️ pin নেই"
+    storage = "✅ Telegram pinned" if blob_read() else "⚠️ no pin"
     return (
-        f"🔍 <b>সিস্টেম স্ট্যাটাস</b>\n\n"
+        f"🔍 <b>System Status</b>\n\n"
         f"┏━━━━━━━━━━━━━━━━━━━┓\n"
         f"   💰 <b>{d.get('balance')} {d.get('currency')}</b>\n"
         f"┗━━━━━━━━━━━━━━━━━━━┛\n\n"
-        f"📌 স্ট্যাটাস: <b>{d.get('status', 'active').upper()}</b>\n"
+        f"📌 Status: <b>{d.get('status', 'active').upper()}</b>\n"
         f"🔑 Key: <code>{mask_key(get_api_key())}</code>\n"
         f"📦 Source: <b>{src}</b>\n"
         f"🗄️ Storage: {storage}\n"
-        f"👑 Admin: {'✅ হ্যাঁ' if is_admin(chat_id) else '❌ না'}\n\n"
+        f"👑 Admin: {'✅ Yes' if is_admin(chat_id) else '❌ No'}\n\n"
         f"{SEP}"
     )
 
@@ -452,6 +482,43 @@ def amarseba_balance():
         return 0, {"success": False, "message": str(e)}
 
 
+def amarseba_batch_status(batch_id):
+    """Get batch status for real-time tracking."""
+    try:
+        r = scraper.get(
+            f"{AMARSEBA_BASE_URL}/bulk-sms/batches/{batch_id}",
+            headers=get_headers(), timeout=15,
+        )
+        try:
+            return r.status_code, r.json()
+        except Exception:
+            return r.status_code, {"success": False}
+    except Exception as e:
+        return 0, {"success": False, "message": str(e)}
+
+
+def extract_batch_status(batch_data):
+    """Determine overall status from batch response."""
+    if not isinstance(batch_data, dict):
+        return None
+    # Try direct status field
+    st = batch_data.get("status")
+    if st:
+        return st
+    # Try counts
+    counts = batch_data.get("counts") or {}
+    if counts:
+        total = sum(int(v) for v in counts.values() if isinstance(v, (int, str)) and str(v).isdigit())
+        if total > 0:
+            sent = int(counts.get("sent", 0) or 0)
+            failed = int(counts.get("failed", 0) or 0)
+            if sent + failed >= total:
+                return "sent" if sent > 0 else "failed"
+            if sent > 0:
+                return "sending"
+    return None
+
+
 def is_valid_phone(p):
     c = p.replace("+", "").replace("-", "").replace(" ", "")
     return c.isdigit() and 10 <= len(c) <= 14
@@ -472,11 +539,11 @@ def cmd_help(chat_id):
 def cmd_id(chat_id):
     tg_send(
         chat_id,
-        f"🆔 <b>আপনার Chat ID</b>\n\n"
+        f"🆔 <b>Your Chat ID</b>\n\n"
         f"{SEP}\n\n"
         f"<code>{chat_id}</code>\n\n"
         f"{SEP}\n\n"
-        f"💡 এটি কপি করে ডেভেলপারকে পাঠাতে পারেন",
+        f"💡 Copy this and send it to the developer",
         reply_markup=kb_main(),
     )
 
@@ -503,12 +570,12 @@ def cmd_debug(chat_id):
     if not is_admin(chat_id):
         tg_send(
             chat_id,
-            f"🔒 <b>এই কমান্ডটি শুধুমাত্র অ্যাডমিনের জন্য</b>\n\n"
+            f"🔒 <b>This command is admin-only</b>\n\n"
             f"{SEP}\n\n"
-            f"📖 কীভাবে বট ব্যবহার করবেন:\n"
-            f"👉 /help পাঠান\n\n"
-            f"💡 আপনার নিজের তথ্য জানতে:\n"
-            f"👉 /id পাঠান",
+            f"📖 How to use the bot:\n"
+            f"👉 Send /help\n\n"
+            f"💡 See your own info:\n"
+            f"👉 Send /id",
             reply_markup=kb_main(),
         )
         return
@@ -536,11 +603,11 @@ def cmd_setkey(chat_id, new_key):
     if not is_admin(chat_id):
         tg_send(
             chat_id,
-            f"🔒 <b>শুধুমাত্র admin API key সেট করতে পারবে</b>\n\n"
+            f"🔒 <b>Only admin can set API key</b>\n\n"
             f"{SEP}\n\n"
-            f"🆔 আপনার chat ID:\n"
+            f"🆔 Your chat ID:\n"
             f"<code>{chat_id}</code>\n\n"
-            f"💡 আপনি এই আইডি ডেভেলপারকে পাঠাতে পারেন",
+            f"💡 Send this to the developer",
             reply_markup=kb_main(),
         )
         return
@@ -548,39 +615,39 @@ def cmd_setkey(chat_id, new_key):
     if not new_key:
         tg_send(
             chat_id,
-            f"📝 <b>ব্যবহারবিধি</b>\n\n"
+            f"📝 <b>Usage</b>\n\n"
             f"{SEP}\n\n"
             f"<code>/setkey sk-ams-live-...</code>\n\n"
-            f"🔑 API key অবশ্যই <code>sk-ams-</code> দিয়ে শুরু হবে",
+            f"🔑 API key must start with <code>sk-ams-</code>",
         )
         return
 
     if not new_key.startswith("sk-ams-"):
-        tg_send(chat_id, f"❌ API key অবশ্যই <code>sk-ams-</code> দিয়ে শুরু হবে।")
+        tg_send(chat_id, f"❌ API key must start with <code>sk-ams-</code>")
         return
 
-    proc_id = tg_send_and_get_id(chat_id, "⏳ API key সেভ করা হচ্ছে...")
+    proc_id = tg_send_and_get_id(chat_id, "⏳ Saving API key...")
     where = set_api_key(new_key)
 
     if where == "blob":
         text = (
-            f"✅ <b>API key সফলভাবে সেভ হয়েছে</b>\n\n"
+            f"✅ <b>API key saved successfully</b>\n\n"
             f"{SEP}\n\n"
             f"🔑 <code>{mask_key(new_key)}</code>\n\n"
-            f"📌 আপনার chat-এ pinned message-এ সংরক্ষিত\n"
-            f"🔒 Cold start হলেও থাকবে\n\n"
+            f"📌 Stored in pinned message in your chat\n"
+            f"🔒 Persists across cold starts\n\n"
             f"{SEP}\n\n"
-            f"💡 এখন /balance দিয়ে টেস্ট করুন"
+            f"💡 Test with /balance"
         )
     else:
         text = (
-            f"⚠️ <b>শুধু memory-তে সেভ হয়েছে</b>\n\n"
+            f"⚠️ <b>Saved in memory only</b>\n\n"
             f"{SEP}\n\n"
             f"🔑 <code>{mask_key(new_key)}</code>\n\n"
-            f"⏱️ Vercel cold start হলে (~১৫-৩০ মিনিট) মুছে যাবে।\n\n"
-            f"💡 চেক করুন:\n"
-            f"  • ADMIN_CHAT_IDS ঠিক আছে?\n"
-            f"  • বটে অন্তত একবার /start দিয়েছেন?"
+            f"⏱️ Will be lost after Vercel cold start (~15-30 min)\n\n"
+            f"💡 Check:\n"
+            f"  • Is ADMIN_CHAT_IDS correct?\n"
+            f"  • Have you sent /start at least once?"
         )
     if proc_id:
         tg_edit(chat_id, proc_id, text)
@@ -590,22 +657,22 @@ def cmd_setkey(chat_id, new_key):
 
 def cmd_delkey(chat_id):
     if not is_admin(chat_id):
-        tg_send(chat_id, f"🔒 শুধুমাত্র admin", reply_markup=kb_main())
+        tg_send(chat_id, f"🔒 Admin only", reply_markup=kb_main())
         return
     clear_api_key()
     tg_send(
         chat_id,
-        f"🗑️ <b>API key মুছে ফেলা হয়েছে</b>\n\n"
+        f"🗑️ <b>API key deleted</b>\n\n"
         f"{SEP}\n\n"
-        f"এখন default key ব্যবহার হবে\n\n"
-        f"💡 নতুন key সেট করতে:\n"
+        f"Now using default key\n\n"
+        f"💡 To set a new key:\n"
         f"<code>/setkey sk-ams-live-...</code>",
     )
 
 
 def cmd_blob_test(chat_id):
     if not is_admin(chat_id):
-        tg_send(chat_id, f"🔒 শুধুমাত্র admin", reply_markup=kb_main())
+        tg_send(chat_id, f"🔒 Admin only", reply_markup=kb_main())
         return
     result = blob_test()
     if result.get("ok"):
@@ -629,16 +696,16 @@ def cmd_send_sms(chat_id, phone, body):
     if not is_valid_phone(phone):
         tg_send(
             chat_id,
-            f"❌ <b>সঠিক নম্বর দিন</b>\n\n"
+            f"❌ <b>Invalid phone number</b>\n\n"
             f"{SEP}\n\n"
-            f"<b>ফরম্যাট:</b>\n"
-            f"<code>01712345678 আপনার মেসেজ</code>",
+            f"<b>Format:</b>\n"
+            f"<code>01712345678 your message</code>",
             reply_markup=kb_main(),
         )
         return
 
     if not body:
-        tg_send(chat_id, "❌ মেসেজ খালি", reply_markup=kb_main())
+        tg_send(chat_id, "❌ Message is empty", reply_markup=kb_main())
         return
 
     tg_typing(chat_id)
@@ -646,18 +713,47 @@ def cmd_send_sms(chat_id, phone, body):
 
     status, data = amarseba_send(phone, body)
 
-    if status in (200, 201, 202) and data.get("success"):
-        d = data.get("data", {})
-        text = msg_sms_sent(d, phone)
-        kb = kb_admin() if is_admin(chat_id) else kb_main()
-    else:
+    if not (status in (200, 201, 202) and data.get("success")):
         text = msg_error(status, data)
-        kb = kb_main()
+        if proc_id:
+            tg_edit(chat_id, proc_id, text, reply_markup=kb_main())
+        else:
+            tg_send(chat_id, text, reply_markup=kb_main())
+        return
 
+    # success — show as queued first
+    d = data.get("data", {})
+    batch_id = d.get("batch_id")
+    initial_text = msg_sms_sent(d, phone, status="queued")
     if proc_id:
-        tg_edit(chat_id, proc_id, text, reply_markup=kb)
+        tg_edit(chat_id, proc_id, initial_text, reply_markup=kb_sms())
     else:
-        tg_send(chat_id, text, reply_markup=kb)
+        proc_id = tg_send_and_get_id(chat_id, initial_text, reply_markup=kb_sms())
+
+    # === real-time status polling ===
+    if not batch_id or not proc_id:
+        return
+
+    final_status = "queued"
+    # poll up to 3 times, 1.5s each → total 4.5s (safe under Vercel 10s)
+    for _ in range(3):
+        time.sleep(1.5)
+        st_code, st_data = amarseba_batch_status(batch_id)
+        if st_code == 200 and st_data.get("success"):
+            sd = st_data.get("data", {}) or {}
+            extracted = extract_batch_status(sd)
+            if extracted:
+                final_status = extracted
+                if final_status.lower() not in ("queued", "sending"):
+                    break
+        # stop early if already resolved
+        if final_status.lower() in ("sent", "failed", "delivered"):
+            break
+
+    # final edit only if status changed
+    if final_status.lower() != "queued":
+        final_text = msg_sms_sent(d, phone, status=final_status)
+        tg_edit(chat_id, proc_id, final_text, reply_markup=kb_sms())
 
 
 # ============================================================
@@ -706,7 +802,7 @@ def handle_callback(cq):
 
         elif data == "debug":
             if not is_admin(chat_id):
-                tg_answer_cb(cq_id, "🔒 শুধুমাত্র admin", show_alert=True)
+                tg_answer_cb(cq_id, "🔒 Admin only", show_alert=True)
                 return
             tg_typing(chat_id)
             tg_edit(chat_id, message_id, msg_processing())
@@ -774,14 +870,14 @@ def handle_update(update):
         if len(parts) < 2:
             tg_send(
                 chat_id,
-                f"⚠️ <b>ফরম্যাট ভুল</b>\n\n"
+                f"⚠️ <b>Wrong format</b>\n\n"
                 f"{SEP}\n\n"
-                f"<b>সঠিক নিয়ম:</b>\n"
-                f"<code>01712345678 আপনার মেসেজ</code>\n\n"
-                f"💡 <b>উদাহরণ:</b>\n"
-                f"<code>01712345678 হ্যালো</code>\n\n"
+                f"<b>Correct format:</b>\n"
+                f"<code>01712345678 your message</code>\n\n"
+                f"💡 <b>Example:</b>\n"
+                f"<code>01712345678 Hello</code>\n\n"
                 f"{SEP}\n\n"
-                f"📖 বিস্তারিত জানতে /help",
+                f"📖 For details send /help",
                 reply_markup=kb_main(),
             )
             return
@@ -795,9 +891,9 @@ def handle_update(update):
         try:
             tg_send(
                 message["chat"]["id"],
-                f"⚠️ <b>ইন্টারনাল ত্রুটি</b>\n\n"
+                f"⚠️ <b>Internal Error</b>\n\n"
                 f"<code>{str(e)[:200]}</code>\n\n"
-                f"ডেভেলপার: @shakib2016",
+                f"Developer: @shakib2016",
             )
         except Exception:
             pass
