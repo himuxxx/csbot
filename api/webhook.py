@@ -1,12 +1,12 @@
 """
 Amarseba SMS Telegram Bot — Vercel
-Fixes: edit-in-place state (no clutter) + optional hidden storage channel
+SMS History + Bot ON/OFF + User tracking + Edit-in-place storage
 """
 import time
 import json
 import uuid
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import requests
 import cloudscraper
 from flask import Flask, request, jsonify
@@ -18,14 +18,19 @@ AMARSEBA_BASE_URL = "https://e-amarseba.com/api/v1"
 
 ADMIN_CHAT_IDS = ["6552783238", "1700797877"]
 
-# 🔒 OPTIONAL: Hide state from bot chat
-# Setup: create private channel → add bot as admin → get chat_id (e.g. -1001234567890)
-# Set to None to use admin's bot chat (state message visible in chat)
-STORAGE_CHAT_ID = "-1004350390541"   # <-- e.g., "-1001234567890"
+# 🔒 Optional: hidden storage channel
+STORAGE_CHAT_ID = None   # e.g., "-1001234567890"
 
 STORE_PREFIX = "🔑AMARSEBA_STATE::"
 LEGACY_KEY_PREFIX = "🔑AMARSEBA_KEY::"
-MAX_USERS_INLINE = 200
+
+# Storage limits (fitted automatically to fit pinned message)
+MAX_USERS_INLINE = 100
+MAX_HISTORY = 30
+MAX_PINNED_CHARS = 3800
+
+# Timezone for display
+BD_TZ = timezone(timedelta(hours=6))
 
 DEV_NAME = "SHAKIB"
 DEV_LINK = "https://t.me/shakib2016"
@@ -44,6 +49,7 @@ _memory_state = {
     "bot_on": True,
     "users": {},
     "user_count": 0,
+    "history": [],
     "state_message_id": None,
 }
 
@@ -88,43 +94,60 @@ def state_read():
             "bot_on": bool(data.get("bot_on", True)),
             "users": data.get("users") or {},
             "user_count": int(data.get("user_count", 0) or 0),
+            "history": data.get("history") or [],
         }
     if text.startswith(LEGACY_KEY_PREFIX):
         k = text[len(LEGACY_KEY_PREFIX):].strip()
-        return {"api_key": (k or None), "bot_on": True, "users": {}, "user_count": 0}
+        return {
+            "api_key": (k or None),
+            "bot_on": True,
+            "users": {},
+            "user_count": 0,
+            "history": [],
+        }
     return None
 
 
+def _build_payload(state):
+    """Trim users & history to fit pinned message."""
+    users = dict(state.get("users") or {})
+    history = list(state.get("history") or [])
+
+    for max_h, max_u in [
+        (MAX_HISTORY, MAX_USERS_INLINE),
+        (20, 80), (15, 60), (10, 40), (7, 30), (5, 20), (3, 10),
+    ]:
+        if len(history) > max_h:
+            history = history[-max_h:]
+        if len(users) > max_u:
+            items = sorted(users.items(), key=lambda kv: kv[1])
+            users = dict(items[-max_u:])
+
+        payload = {
+            "api_key": state.get("api_key") or "",
+            "bot_on": bool(state.get("bot_on", True)),
+            "user_count": int(state.get("user_count", 0) or 0),
+            "users": users,
+            "history": history,
+        }
+        txt = f"{STORE_PREFIX}{json.dumps(payload, separators=(',', ':'))}"
+        if len(txt) <= MAX_PINNED_CHARS:
+            return payload
+
+    return payload
+
+
 def state_write(state):
-    """Edit-in-place; only create new message if no existing state."""
     chat = _storage_chat()
     if not chat:
         return False
 
-    users = dict(state.get("users") or {})
-    if len(users) > MAX_USERS_INLINE:
-        items = sorted(users.items(), key=lambda kv: kv[1])
-        users = dict(items[-MAX_USERS_INLINE:])
-
-    payload = {
-        "api_key": state.get("api_key") or "",
-        "bot_on": bool(state.get("bot_on", True)),
-        "user_count": int(state.get("user_count", 0) or 0),
-        "users": users,
-    }
+    payload = _build_payload(state)
     new_text = f"{STORE_PREFIX}{json.dumps(payload, separators=(',', ':'))}"
 
-    # Try cached message id first (fast path on warm)
-    existing_id = _memory_state.get("state_message_id")
-    _, existing_text = _get_pinned()
+    existing_id, existing_text = _get_pinned()
 
-    if not existing_id or not (existing_text or "").startswith(STORE_PREFIX):
-        existing_id, existing_text = _get_pinned()
-        if existing_id and (existing_text or "").startswith(STORE_PREFIX):
-            _memory_state["state_message_id"] = existing_id
-
-    # Edit-in-place
-    if existing_id:
+    if existing_id and (existing_text or "").startswith(STORE_PREFIX):
         try:
             er = requests.post(
                 f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText",
@@ -143,7 +166,7 @@ def state_write(state):
         except Exception as e:
             print(f"state_write edit error: {e}")
 
-    # Fallback: delete old + send new + pin
+    # Fallback: delete + send new + pin
     try:
         requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/unpinAllChatMessages",
@@ -196,12 +219,12 @@ def _current_state():
         "bot_on": _memory_state["bot_on"],
         "users": _memory_state["users"],
         "user_count": _memory_state["user_count"],
+        "history": _memory_state["history"],
     }
 
 
 def get_api_key():
-    st = _current_state()
-    return st.get("api_key") or AMARSEBA_API_KEY_DEFAULT
+    return _current_state().get("api_key") or AMARSEBA_API_KEY_DEFAULT
 
 
 def is_bot_on():
@@ -237,7 +260,7 @@ def track_user(chat_id):
         return False
     if len(users) >= MAX_USERS_INLINE:
         return False
-    users[key] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    users[key] = datetime.now(BD_TZ).strftime("%Y-%m-%d")
     st["users"] = users
     st["user_count"] = int(st.get("user_count", 0) or 0) + 1
     _memory_state["users"] = users
@@ -261,6 +284,61 @@ def reset_users():
     _memory_state["users"] = {}
     _memory_state["user_count"] = 0
     return state_write(st)
+
+
+# ============================================================
+# SMS HISTORY
+# ============================================================
+def add_history(chat_id, phone, body, cost, status="processing"):
+    st = _current_state()
+    hist = list(st.get("history") or [])
+    now = datetime.now(BD_TZ)
+
+    record = {
+        "t": now.strftime("%m-%d %H:%M"),
+        "u": str(chat_id),
+        "p": phone,
+        "m": (body or "")[:40],
+        "c": str(cost) if cost is not None else "-",
+        "s": status,
+    }
+    hist.append(record)
+    if len(hist) > MAX_HISTORY:
+        hist = hist[-MAX_HISTORY:]
+
+    st["history"] = hist
+    _memory_state["history"] = hist
+    state_write(st)
+    return record
+
+
+def update_history_status(chat_id, phone, final_status):
+    st = _current_state()
+    hist = list(st.get("history") or [])
+    for i in range(len(hist) - 1, -1, -1):
+        r = hist[i]
+        if r.get("u") == str(chat_id) and r.get("p") == phone:
+            r["s"] = final_status
+            st["history"] = hist
+            _memory_state["history"] = hist
+            state_write(st)
+            return True
+    return False
+
+
+def clear_history():
+    st = _current_state()
+    st["history"] = []
+    _memory_state["history"] = []
+    return state_write(st)
+
+
+def get_history(chat_id=None):
+    st = _current_state()
+    hist = list(st.get("history") or [])
+    if chat_id is not None:
+        hist = [r for r in hist if r.get("u") == str(chat_id)]
+    return hist
 
 
 def is_admin(chat_id):
@@ -341,7 +419,8 @@ def kb_main():
     return {"inline_keyboard": [
         [{"text": "💰 Balance", "callback_data": "balance"},
          {"text": "📖 Help", "callback_data": "help"}],
-        [{"text": "👨‍💻 Developer", "url": DEV_LINK}],
+        [{"text": "📝 History", "callback_data": "history"},
+         {"text": "👨‍💻 Developer", "url": DEV_LINK}],
     ]}
 
 
@@ -349,7 +428,8 @@ def kb_help():
     return {"inline_keyboard": [
         [{"text": "💰 Balance", "callback_data": "balance"},
          {"text": "🏠 Home", "callback_data": "home"}],
-        [{"text": "👨‍💻 Developer", "url": DEV_LINK}],
+        [{"text": "📝 History", "callback_data": "history"},
+         {"text": "👨‍💻 Developer", "url": DEV_LINK}],
     ]}
 
 
@@ -357,8 +437,9 @@ def kb_balance():
     return {"inline_keyboard": [
         [{"text": "🔄 Refresh", "callback_data": "balance"},
          {"text": "📖 Help", "callback_data": "help"}],
-        [{"text": "🏠 Home", "callback_data": "home"},
-         {"text": "👨‍💻 Developer", "url": DEV_LINK}],
+        [{"text": "📝 History", "callback_data": "history"},
+         {"text": "🏠 Home", "callback_data": "home"}],
+        [{"text": "👨‍💻 Developer", "url": DEV_LINK}],
     ]}
 
 
@@ -367,8 +448,9 @@ def kb_admin():
         [{"text": "💰 Balance", "callback_data": "balance"},
          {"text": "🔍 Debug", "callback_data": "debug"}],
         [{"text": "📊 Users", "callback_data": "users"},
-         {"text": "📖 Help", "callback_data": "help"}],
-        [{"text": "👨‍💻 Developer", "url": DEV_LINK}],
+         {"text": "📝 History", "callback_data": "history"}],
+        [{"text": "📖 Help", "callback_data": "help"},
+         {"text": "👨‍💻 Developer", "url": DEV_LINK}],
     ]}
 
 
@@ -376,8 +458,24 @@ def kb_sms():
     return {"inline_keyboard": [
         [{"text": "🏠 Home", "callback_data": "home"},
          {"text": "💰 Balance", "callback_data": "balance"}],
-        [{"text": "📖 Help", "callback_data": "help"},
-         {"text": "👨‍💻 Developer", "url": DEV_LINK}],
+        [{"text": "📝 History", "callback_data": "history"},
+         {"text": "📖 Help", "callback_data": "help"}],
+        [{"text": "👨‍💻 Developer", "url": DEV_LINK}],
+    ]}
+
+
+def kb_history(is_admin_user):
+    if is_admin_user:
+        return {"inline_keyboard": [
+            [{"text": "🔄 Refresh", "callback_data": "history"},
+             {"text": "🗑️ Clear All", "callback_data": "clearhistory"}],
+            [{"text": "🏠 Home", "callback_data": "home"},
+             {"text": "👨‍💻 Developer", "url": DEV_LINK}],
+        ]}
+    return {"inline_keyboard": [
+        [{"text": "🔄 Refresh", "callback_data": "history"},
+         {"text": "🏠 Home", "callback_data": "home"}],
+        [{"text": "👨‍💻 Developer", "url": DEV_LINK}],
     ]}
 
 
@@ -408,8 +506,18 @@ def msg_welcome(chat_id):
             f"  • /botoff / /boton — Toggle bot\n"
             f"  • /botstatus — Bot state\n"
             f"  • /users — Total users\n"
-            f"  • /cleanstate — Remove state msg\n"
-            f"  • /storagesetup — Hide state\n\n"
+            f"  • /history — SMS history\n"
+            f"  • /clearhistory — Reset history\n"
+            f"  • /cleanstate — Cleanup state\n\n"
+            f"{SEP}\n"
+        )
+    else:
+        body += (
+            f"\n📋 <b>Commands:</b>\n"
+            f"  • /balance — Wallet balance\n"
+            f"  • /history — Your SMS history\n"
+            f"  • /id — Your chat ID\n"
+            f"  • /help — Detailed guide\n\n"
             f"{SEP}\n"
         )
     body += f"\n👨‍💻 <b>Developer:</b> <a href=\"{DEV_LINK}\">@shakib2016</a>"
@@ -459,6 +567,8 @@ def status_display(st):
         return "❌", "Failed"
     if s == "refunded":
         return "💸", "Refunded"
+    if s == "queued":
+        return "⏳", "Queued"
     return "⏳", "Processing"
 
 
@@ -497,7 +607,7 @@ def msg_error(status, data):
 
 def msg_debug(chat_id, d, src):
     st = state_read() or {}
-    storage_hidden = "🔒 Hidden channel" if STORAGE_CHAT_ID else "⚠️ Visible in bot chat"
+    storage_hidden = "🔒 Hidden" if STORAGE_CHAT_ID else "⚠️ Visible"
     bot_state = "🟢 ON" if is_bot_on() else "🔴 OFF"
     return (
         f"🔍 <b>System Status</b>\n\n"
@@ -507,6 +617,7 @@ def msg_debug(chat_id, d, src):
         f"📌 Status: <b>{d.get('status', 'active').upper()}</b>\n"
         f"🤖 Bot: <b>{bot_state}</b>\n"
         f"👥 Users: <b>{int(st.get('user_count', 0) or 0)}</b>\n"
+        f"📝 History: <b>{len(st.get('history') or [])}</b>\n"
         f"🔑 Key: <code>{mask_key(get_api_key())}</code>\n"
         f"📦 Source: <b>{src}</b>\n"
         f"🗄️ Storage: {storage_hidden}\n"
@@ -518,7 +629,7 @@ def msg_debug(chat_id, d, src):
 def msg_bot_off():
     return (
         f"🔴 <b>Bot is Currently OFF</b>\n\n{SEP}\n\n"
-        f"⚠️ The bot has been temporarily disabled by the admin.\n\n"
+        f"⚠️ Temporarily disabled by admin.\n\n"
         f"🕐 Please try again later.\n\n{SEP}\n\n"
         f"👨‍💻 <b>Need help?</b>\n"
         f"👉 <a href=\"{DEV_LINK}\">@shakib2016</a>"
@@ -550,6 +661,71 @@ def msg_users():
         lines.append("\n<i>No users tracked yet.</i>")
     lines += [f"\n{SEP}", f"💡 Reset: /resetusers"]
     return "\n".join(lines)
+
+
+def msg_history(chat_id, is_admin_user):
+    hist = get_history(None if is_admin_user else chat_id)
+
+    if not hist:
+        return (
+            f"📝 <b>SMS History</b>\n\n{SEP}\n\n"
+            f"<i>No SMS sent yet.</i>\n\n"
+            f"💡 Send one like:\n"
+            f"<code>01712345678 Hello</code>\n\n{SEP}"
+        )
+
+    total_count = len(hist)
+    total_cost = 0.0
+    for r in hist:
+        try:
+            if r.get("c") and r.get("c") != "-":
+                total_cost += float(r["c"])
+        except Exception:
+            pass
+
+    lines = [
+        f"📝 <b>SMS History</b>",
+        f"",
+        f"{SEP}",
+        f"",
+        f"📊 Total: <b>{total_count}</b> SMS | <b>{total_cost:.2f} BDT</b>",
+        f"",
+        f"{SEP}",
+        f"",
+    ]
+
+    # Show last 10
+    display = hist[-10:]
+    for r in reversed(display):
+        s = str(r.get("s", "")).lower()
+        if s == "sent" or s == "delivered":
+            icon = "✅"
+        elif s == "failed":
+            icon = "❌"
+        elif s == "refunded":
+            icon = "💸"
+        elif s == "queued":
+            icon = "⏳"
+        else:
+            icon = "⏳"
+
+        t = r.get("t", "??")
+        phone = r.get("p", "-")
+        cost = r.get("c", "-")
+        body_preview = r.get("m", "")
+
+        lines.append(f"🕐 <b>{t}</b>   {icon}")
+        lines.append(f"📱 <code>{phone}</code>  💵 <b>{cost} BDT</b>")
+        if is_admin_user:
+            lines.append(f"👤 <code>{r.get('u', '-')}</code>")
+        if body_preview:
+            lines.append(f"💬 <i>{body_preview}</i>")
+        lines.append("")
+
+    lines.append(SEP)
+    if total_count > 10:
+        lines.append(f"<i>Showing last 10 of {total_count}</i>")
+    return "\n".join(lines).strip()
 
 
 # ============================================================
@@ -628,7 +804,7 @@ def is_valid_phone(p):
 
 
 # ============================================================
-# COMMAND HANDLERS
+# COMMANDS
 # ============================================================
 def cmd_start(chat_id):
     kb = kb_admin() if is_admin(chat_id) else kb_main()
@@ -660,6 +836,27 @@ def cmd_balance(chat_id):
         tg_edit(chat_id, pid, txt, reply_markup=kb)
     else:
         tg_send(chat_id, txt, reply_markup=kb)
+
+
+def cmd_history(chat_id):
+    is_adm = is_admin(chat_id)
+    txt = msg_history(chat_id, is_adm)
+    tg_send(chat_id, txt, reply_markup=kb_history(is_adm))
+
+
+def cmd_clearhistory(chat_id):
+    if not is_admin(chat_id):
+        tg_send(chat_id, "🔒 Admin only", reply_markup=kb_main())
+        return
+    ok = clear_history()
+    if ok:
+        tg_send(chat_id,
+            f"🗑️ <b>History Cleared</b>\n\n{SEP}\n\n"
+            f"✅ All SMS records deleted\n\n"
+            f"<i>Next SMS will start a new history.</i>",
+            reply_markup=kb_admin())
+    else:
+        tg_send(chat_id, f"❌ Failed to clear history.")
 
 
 def cmd_debug(chat_id):
@@ -764,17 +961,13 @@ def cmd_resetusers(chat_id):
 
 
 def cmd_cleanstate(chat_id):
-    """Delete current pinned state message from storage chat."""
     if not is_admin(chat_id):
         tg_send(chat_id, "🔒 Admin only", reply_markup=kb_main())
         return
-
     storage = _storage_chat()
     if not storage:
-        tg_send(chat_id, "❌ No storage chat configured")
+        tg_send(chat_id, "❌ No storage chat")
         return
-
-    # Unpin all
     try:
         requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/unpinAllChatMessages",
@@ -782,8 +975,6 @@ def cmd_cleanstate(chat_id):
         )
     except Exception:
         pass
-
-    # Delete current pinned message if state
     mid, mtext = _get_pinned()
     if mid and (mtext or "").startswith(STORE_PREFIX):
         try:
@@ -793,55 +984,12 @@ def cmd_cleanstate(chat_id):
             )
         except Exception:
             pass
-
     _memory_state["state_message_id"] = None
-
     tg_send(chat_id,
         f"🧹 <b>Cleanup done</b>\n\n{SEP}\n\n"
-        f"✅ Unpinned all messages\n"
-        f"✅ Deleted current state message\n"
-        f"✅ Cleared cache\n\n"
-        f"⚠️ <b>Note:</b> Old unpinned state messages (from before) may still\n"
-        f"appear in your chat. Long-press each to delete manually.\n\n"
-        f"💡 State will regenerate on next use.",
+        f"✅ Unpinned and deleted current state\n"
+        f"⚠️ Old messages may need manual deletion",
         reply_markup=kb_admin())
-
-
-def cmd_storagesetup(chat_id):
-    if not is_admin(chat_id):
-        tg_send(chat_id, "🔒 Admin only", reply_markup=kb_main())
-        return
-
-    current = _storage_chat()
-    is_hidden = STORAGE_CHAT_ID is not None
-
-    if is_hidden:
-        text = (
-            f"🗄️ <b>Storage Status</b>\n\n{SEP}\n\n"
-            f"✅ <b>Hidden Mode</b>\n\n"
-            f"📌 Chat: <code>{current}</code>\n"
-            f"🔒 State messages are NOT visible in bot chat\n\n"
-            f"State lives in a separate private channel."
-        )
-    else:
-        text = (
-            f"🗄️ <b>Storage Status</b>\n\n{SEP}\n\n"
-            f"⚠️ <b>Visible Mode</b>\n\n"
-            f"📌 Chat: <code>{current}</code>\n"
-            f"👁️ One state message appears in bot chat (auto-edited, no clutter)\n\n"
-            f"{SEP}\n\n"
-            f"<b>🔒 To hide completely:</b>\n\n"
-            f"1. Create a private Telegram channel\n"
-            f"2. Add this bot as admin\n"
-            f"3. Get the channel ID:\n"
-            f"   • Send /id in that channel with @userinfobot\n"
-            f"   • OR forward any channel post to @userinfobot\n"
-            f"4. Edit code:\n"
-            f"   <code>STORAGE_CHAT_ID = \"-1001234567890\"</code>\n"
-            f"5. Push &amp; redeploy\n"
-            f"6. Run /cleanstate"
-        )
-    tg_send(chat_id, text, reply_markup=kb_admin())
 
 
 def cmd_send_sms(chat_id, phone, body):
@@ -871,6 +1019,9 @@ def cmd_send_sms(chat_id, phone, body):
     cost = d.get("total_cost")
     bal = d.get("balance_after")
 
+    # Add history entry (queued)
+    add_history(chat_id, phone, body, cost, status="queued")
+
     proc_txt = msg_sms(phone, "processing", cost, bal)
     if pid:
         tg_edit(chat_id, pid, proc_txt, reply_markup=kb_sms())
@@ -888,6 +1039,9 @@ def cmd_send_sms(chat_id, phone, body):
                     final = "failed"
         except Exception as e:
             print(f"batch check error: {e}")
+
+    # Update history with final status
+    update_history_status(chat_id, phone, final)
 
     final_txt = msg_sms(phone, final, cost, bal)
     if pid:
@@ -928,15 +1082,29 @@ def handle_callback(cq):
             kb = kb_admin() if is_admin(chat_id) else kb_main()
             tg_edit(chat_id, mid, msg_welcome(chat_id), kb)
 
+        elif data == "history":
+            is_adm = is_admin(chat_id)
+            tg_edit(chat_id, mid, msg_history(chat_id, is_adm), kb_history(is_adm))
+
+        elif data == "clearhistory":
+            if not is_admin(chat_id):
+                tg_answer_cb(cq_id, "🔒 Admin only", show_alert=True)
+                return
+            clear_history()
+            tg_edit(chat_id, mid,
+                f"🗑️ <b>History Cleared</b>\n\n{SEP}\n\n"
+                f"✅ All SMS records deleted",
+                kb_history(True))
+
         elif data == "users":
             if not is_admin(chat_id):
-                tg_answer_cb(cq_id, "🔒 Admin", show_alert=True)
+                tg_answer_cb(cq_id, "🔒 Admin only", show_alert=True)
                 return
             tg_edit(chat_id, mid, msg_users(), kb_admin())
 
         elif data == "debug":
             if not is_admin(chat_id):
-                tg_answer_cb(cq_id, "🔒 Admin", show_alert=True)
+                tg_answer_cb(cq_id, "🔒 Admin only", show_alert=True)
                 return
             tg_typing(chat_id)
             tg_edit(chat_id, mid, msg_processing())
@@ -949,6 +1117,7 @@ def handle_callback(cq):
                 tg_edit(chat_id, mid, msg_debug(chat_id, resp["data"], src), kb_admin())
             else:
                 tg_edit(chat_id, mid, msg_error(status, resp), kb_admin())
+
     except Exception as e:
         print(f"callback error: {e}")
         print(traceback.format_exc())
@@ -983,6 +1152,8 @@ def handle_update(update):
             return cmd_start(chat_id) if text == "/start" else cmd_help(chat_id)
         if text == "/id": return cmd_id(chat_id)
         if text == "/balance": return cmd_balance(chat_id)
+        if text == "/history": return cmd_history(chat_id)
+        if text == "/clearhistory": return cmd_clearhistory(chat_id)
         if text == "/debug": return cmd_debug(chat_id)
         if text == "/delkey": return cmd_delkey(chat_id)
         if text == "/botoff": return cmd_botoff(chat_id)
@@ -991,7 +1162,6 @@ def handle_update(update):
         if text == "/users": return cmd_users(chat_id)
         if text == "/resetusers": return cmd_resetusers(chat_id)
         if text == "/cleanstate": return cmd_cleanstate(chat_id)
-        if text == "/storagesetup": return cmd_storagesetup(chat_id)
         if text.startswith("/setkey"):
             return cmd_setkey(chat_id, text[7:].strip())
 
@@ -1034,7 +1204,7 @@ def root():
         "developer": "@shakib2016",
         "bot_on": is_bot_on(),
         "user_count": get_user_stats()["count"],
-        "storage_hidden": STORAGE_CHAT_ID is not None,
+        "history_count": len(get_history()),
     })
 
 
