@@ -1,8 +1,7 @@
 """
 Amarseba SMS Telegram Bot — Vercel
-Real-time status + English UI + Home button
+On-demand status check via button + English UI
 """
-import time
 import uuid
 import traceback
 import requests
@@ -30,6 +29,7 @@ scraper = cloudscraper.create_scraper(
 )
 
 _memory_key = {"value": None}
+_memory_batches = {}   # batch_id -> {phone, cost, balance_after, status}
 
 
 # ============================================================
@@ -287,19 +287,23 @@ def kb_admin():
     }
 
 
-def kb_sms():
-    return {
-        "inline_keyboard": [
-            [
-                {"text": "🏠 Home", "callback_data": "home"},
-                {"text": "💰 Balance", "callback_data": "balance"},
-            ],
-            [
-                {"text": "📖 Help", "callback_data": "help"},
-                {"text": "👨‍💻 Developer", "url": DEV_LINK},
-            ],
-        ]
-    }
+def kb_sms(batch_id=None):
+    rows = []
+    if batch_id:
+        rows.append([
+            {"text": "🔄 Check Status", "callback_data": f"st:{batch_id}"},
+            {"text": "🏠 Home", "callback_data": "home"},
+        ])
+    else:
+        rows.append([
+            {"text": "🏠 Home", "callback_data": "home"},
+            {"text": "💰 Balance", "callback_data": "balance"},
+        ])
+    rows.append([
+        {"text": "📖 Help", "callback_data": "help"},
+        {"text": "👨‍💻 Developer", "url": DEV_LINK},
+    ])
+    return {"inline_keyboard": rows}
 
 
 # ============================================================
@@ -334,7 +338,7 @@ def msg_welcome(chat_id):
 
 
 def msg_help(chat_id):
-    body = (
+    return (
         f"📖 <b>Detailed Guide</b>\n\n"
         f"{SEP}\n\n"
         f"1️⃣ <b>How to Send SMS</b>\n\n"
@@ -350,7 +354,6 @@ def msg_help(chat_id):
         f"Contact the developer:\n"
         f"👉 <a href=\"{DEV_LINK}\">@shakib2016</a>"
     )
-    return body
 
 
 def msg_balance(d):
@@ -365,47 +368,39 @@ def msg_balance(d):
     )
 
 
-def msg_sms_processing():
-    return (
-        f"⏳ <b>Processing...</b>\n\n"
-        f"{SEP}\n\n"
-        f"📤 Sending SMS\n"
-        f"⏰ Please wait\n\n"
-        f"{SEP}"
-    )
+def msg_processing():
+    return f"⏳ <b>Processing...</b>\n\n{SEP}\n\nPlease wait..."
 
 
-def msg_sms_sent(d, phone, status=None):
-    raw_status = status or d.get("status", "queued")
-    st = str(raw_status).upper()
+def status_display(st):
+    s = str(st or "").lower()
+    if s in ("sent", "delivered"):
+        return "✅", "Sent"
+    if s == "failed":
+        return "❌", "Failed"
+    if s == "sending":
+        return "🔄", "Sending"
+    if s == "refunded":
+        return "💸", "Refunded"
+    return "⏳", "Queued"
 
-    # status emoji
-    if st in ("SENT", "DELIVERED"):
-        emoji = "✅"
-        label = "Sent"
-    elif st == "FAILED":
-        emoji = "❌"
-        label = "Failed"
-    elif st == "SENDING":
-        emoji = "🔄"
-        label = "Sending"
-    else:
-        emoji = "⏳"
-        label = "Queued"
 
+def msg_sms_sent(phone, status="queued", cost=None, balance_after=None):
+    emoji, label = status_display(status)
     lines = [
-        f"✅ <b>SMS Successfully Sent!</b>\n",
+        f"📨 <b>SMS Details</b>\n",
         f"┏━━━━━━━━━━━━━━━━━━━┓",
-        f"   📋 <b>Details</b>",
+        f"   📋 <b>Info</b>",
         f"┗━━━━━━━━━━━━━━━━━━━┛\n",
         f"📱 Recipient: <code>{phone}</code>",
         f"📊 Status: {emoji} <b>{label}</b>",
-        f"💵 Cost: <b>{d.get('total_cost', '-')} BDT</b>",
-        f"💰 New Balance: <b>{d.get('balance_after', '-')} BDT</b>\n",
-        f"{SEP}\n",
-        f"🆔 <b>Batch ID:</b>",
-        f"<code>{d.get('batch_id', '-')}</code>",
     ]
+    if cost is not None:
+        lines.append(f"💵 Cost: <b>{cost} BDT</b>")
+    if balance_after is not None:
+        lines.append(f"💰 New Balance: <b>{balance_after} BDT</b>")
+    lines.append("")
+    lines.append(SEP)
     return "\n".join(lines)
 
 
@@ -422,14 +417,6 @@ def msg_error(status, data):
         f"  • Check balance (/balance)\n"
         f"  • Try again\n\n"
         f"❓ Need help: @shakib2016"
-    )
-
-
-def msg_processing():
-    return (
-        f"⏳ <b>Processing...</b>\n\n"
-        f"{SEP}\n\n"
-        f"Please wait..."
     )
 
 
@@ -482,8 +469,7 @@ def amarseba_balance():
         return 0, {"success": False, "message": str(e)}
 
 
-def amarseba_batch_status(batch_id):
-    """Get batch status for real-time tracking."""
+def amarseba_batch(batch_id):
     try:
         r = scraper.get(
             f"{AMARSEBA_BASE_URL}/bulk-sms/batches/{batch_id}",
@@ -497,26 +483,31 @@ def amarseba_batch_status(batch_id):
         return 0, {"success": False, "message": str(e)}
 
 
-def extract_batch_status(batch_data):
-    """Determine overall status from batch response."""
+def extract_status(batch_data):
     if not isinstance(batch_data, dict):
-        return None
-    # Try direct status field
+        return "queued"
     st = batch_data.get("status")
     if st:
-        return st
-    # Try counts
+        return str(st).lower()
     counts = batch_data.get("counts") or {}
-    if counts:
-        total = sum(int(v) for v in counts.values() if isinstance(v, (int, str)) and str(v).isdigit())
+    if isinstance(counts, dict) and counts:
+        def _i(k):
+            v = counts.get(k, 0)
+            try:
+                return int(v)
+            except Exception:
+                return 0
+        sent = _i("sent")
+        failed = _i("failed")
+        queued = _i("queued")
+        sending = _i("sending")
+        total = sent + failed + queued + sending
         if total > 0:
-            sent = int(counts.get("sent", 0) or 0)
-            failed = int(counts.get("failed", 0) or 0)
             if sent + failed >= total:
                 return "sent" if sent > 0 else "failed"
-            if sent > 0:
+            if sending > 0 or sent > 0:
                 return "sending"
-    return None
+    return "queued"
 
 
 def is_valid_phone(p):
@@ -570,12 +561,10 @@ def cmd_debug(chat_id):
     if not is_admin(chat_id):
         tg_send(
             chat_id,
-            f"🔒 <b>This command is admin-only</b>\n\n"
+            f"🔒 <b>Admin-only command</b>\n\n"
             f"{SEP}\n\n"
-            f"📖 How to use the bot:\n"
-            f"👉 Send /help\n\n"
-            f"💡 See your own info:\n"
-            f"👉 Send /id",
+            f"📖 How to use: /help\n"
+            f"💡 Your info: /id",
             reply_markup=kb_main(),
         )
         return
@@ -605,8 +594,7 @@ def cmd_setkey(chat_id, new_key):
             chat_id,
             f"🔒 <b>Only admin can set API key</b>\n\n"
             f"{SEP}\n\n"
-            f"🆔 Your chat ID:\n"
-            f"<code>{chat_id}</code>\n\n"
+            f"🆔 Your chat ID:\n<code>{chat_id}</code>\n\n"
             f"💡 Send this to the developer",
             reply_markup=kb_main(),
         )
@@ -615,10 +603,8 @@ def cmd_setkey(chat_id, new_key):
     if not new_key:
         tg_send(
             chat_id,
-            f"📝 <b>Usage</b>\n\n"
-            f"{SEP}\n\n"
-            f"<code>/setkey sk-ams-live-...</code>\n\n"
-            f"🔑 API key must start with <code>sk-ams-</code>",
+            f"📝 <b>Usage</b>\n\n{SEP}\n\n"
+            f"<code>/setkey sk-ams-live-...</code>",
         )
         return
 
@@ -631,23 +617,17 @@ def cmd_setkey(chat_id, new_key):
 
     if where == "blob":
         text = (
-            f"✅ <b>API key saved successfully</b>\n\n"
-            f"{SEP}\n\n"
+            f"✅ <b>API key saved</b>\n\n{SEP}\n\n"
             f"🔑 <code>{mask_key(new_key)}</code>\n\n"
-            f"📌 Stored in pinned message in your chat\n"
+            f"📌 Stored in pinned message\n"
             f"🔒 Persists across cold starts\n\n"
-            f"{SEP}\n\n"
             f"💡 Test with /balance"
         )
     else:
         text = (
-            f"⚠️ <b>Saved in memory only</b>\n\n"
-            f"{SEP}\n\n"
+            f"⚠️ <b>Saved in memory only</b>\n\n{SEP}\n\n"
             f"🔑 <code>{mask_key(new_key)}</code>\n\n"
-            f"⏱️ Will be lost after Vercel cold start (~15-30 min)\n\n"
-            f"💡 Check:\n"
-            f"  • Is ADMIN_CHAT_IDS correct?\n"
-            f"  • Have you sent /start at least once?"
+            f"⏱️ Lost after cold start (~15-30 min)"
         )
     if proc_id:
         tg_edit(chat_id, proc_id, text)
@@ -662,11 +642,8 @@ def cmd_delkey(chat_id):
     clear_api_key()
     tg_send(
         chat_id,
-        f"🗑️ <b>API key deleted</b>\n\n"
-        f"{SEP}\n\n"
-        f"Now using default key\n\n"
-        f"💡 To set a new key:\n"
-        f"<code>/setkey sk-ams-live-...</code>",
+        f"🗑️ <b>API key deleted</b>\n\n{SEP}\n\n"
+        f"Now using default key",
     )
 
 
@@ -678,17 +655,15 @@ def cmd_blob_test(chat_id):
     if result.get("ok"):
         tg_send(
             chat_id,
-            f"✅ <b>Storage OK</b>\n\n"
-            f"{SEP}\n\n"
-            f"💬 Storage chat: <code>{result.get('chat_id')}</code>\n"
+            f"✅ <b>Storage OK</b>\n\n{SEP}\n\n"
+            f"💬 Chat: <code>{result.get('chat_id')}</code>\n"
             f"📌 Pinned: <code>{result.get('pinned_text')[:40]}</code>\n"
             f"🔑 Has key: {result.get('has_key')}",
         )
     else:
         tg_send(
             chat_id,
-            f"❌ <b>Storage fail</b>\n\n"
-            f"Reason: <code>{result.get('reason', 'unknown')}</code>",
+            f"❌ <b>Storage fail</b>\n\nReason: <code>{result.get('reason', 'unknown')}</code>",
         )
 
 
@@ -696,10 +671,8 @@ def cmd_send_sms(chat_id, phone, body):
     if not is_valid_phone(phone):
         tg_send(
             chat_id,
-            f"❌ <b>Invalid phone number</b>\n\n"
-            f"{SEP}\n\n"
-            f"<b>Format:</b>\n"
-            f"<code>01712345678 your message</code>",
+            f"❌ <b>Invalid phone</b>\n\n{SEP}\n\n"
+            f"<b>Format:</b>\n<code>01712345678 your message</code>",
             reply_markup=kb_main(),
         )
         return
@@ -709,7 +682,7 @@ def cmd_send_sms(chat_id, phone, body):
         return
 
     tg_typing(chat_id)
-    proc_id = tg_send_and_get_id(chat_id, msg_sms_processing())
+    proc_id = tg_send_and_get_id(chat_id, msg_processing())
 
     status, data = amarseba_send(phone, body)
 
@@ -721,39 +694,65 @@ def cmd_send_sms(chat_id, phone, body):
             tg_send(chat_id, text, reply_markup=kb_main())
         return
 
-    # success — show as queued first
-    d = data.get("data", {})
-    batch_id = d.get("batch_id")
-    initial_text = msg_sms_sent(d, phone, status="queued")
+    d = data.get("data", {}) or {}
+    batch_id = d.get("batch_id", "")
+    initial_status = d.get("status", "queued")
+
+    # store batch metadata for later "Check Status" clicks
+    if batch_id:
+        _memory_batches[batch_id] = {
+            "phone": phone,
+            "cost": d.get("total_cost"),
+            "balance_after": d.get("balance_after"),
+            "status": initial_status,
+        }
+
+    text = msg_sms_sent(
+        phone,
+        status=initial_status,
+        cost=d.get("total_cost"),
+        balance_after=d.get("balance_after"),
+    )
+    kb = kb_sms(batch_id if batch_id else None)
+
     if proc_id:
-        tg_edit(chat_id, proc_id, initial_text, reply_markup=kb_sms())
+        tg_edit(chat_id, proc_id, text, reply_markup=kb)
     else:
-        proc_id = tg_send_and_get_id(chat_id, initial_text, reply_markup=kb_sms())
+        tg_send(chat_id, text, reply_markup=kb)
 
-    # === real-time status polling ===
-    if not batch_id or not proc_id:
-        return
 
-    final_status = "queued"
-    # poll up to 3 times, 1.5s each → total 4.5s (safe under Vercel 10s)
-    for _ in range(3):
-        time.sleep(1.5)
-        st_code, st_data = amarseba_batch_status(batch_id)
-        if st_code == 200 and st_data.get("success"):
-            sd = st_data.get("data", {}) or {}
-            extracted = extract_batch_status(sd)
-            if extracted:
-                final_status = extracted
-                if final_status.lower() not in ("queued", "sending"):
-                    break
-        # stop early if already resolved
-        if final_status.lower() in ("sent", "failed", "delivered"):
-            break
+def check_status_and_edit(chat_id, message_id, batch_id):
+    """Fetch batch status and update the SMS details message."""
+    meta = _memory_batches.get(batch_id, {})
+    phone = meta.get("phone", "-")
+    cost = meta.get("cost")
+    balance_after = meta.get("balance_after")
 
-    # final edit only if status changed
-    if final_status.lower() != "queued":
-        final_text = msg_sms_sent(d, phone, status=final_status)
-        tg_edit(chat_id, proc_id, final_text, reply_markup=kb_sms())
+    status_code, resp = amarseba_batch(batch_id)
+    if status_code == 200 and resp.get("success"):
+        bd = resp.get("data", {}) or {}
+        new_status = extract_status(bd)
+    else:
+        new_status = meta.get("status", "queued")
+
+    _memory_batches[batch_id] = {
+        "phone": phone,
+        "cost": cost,
+        "balance_after": balance_after,
+        "status": new_status,
+    }
+
+    # decide whether to keep the check-status button
+    is_final = str(new_status).lower() in ("sent", "failed", "delivered", "refunded")
+    kb = kb_sms(None if is_final else batch_id)
+
+    text = msg_sms_sent(
+        phone,
+        status=new_status,
+        cost=cost,
+        balance_after=balance_after,
+    )
+    tg_edit(chat_id, message_id, text, reply_markup=kb)
 
 
 # ============================================================
@@ -821,6 +820,13 @@ def handle_callback(cq):
                     reply_markup=kb_admin(),
                 )
 
+        elif data.startswith("st:"):
+            # check status for a specific batch
+            batch_id = data[3:]
+            if not batch_id:
+                return
+            check_status_and_edit(chat_id, message_id, batch_id)
+
     except Exception as e:
         print(f"handle_callback error: {e}")
         print(traceback.format_exc())
@@ -870,14 +876,10 @@ def handle_update(update):
         if len(parts) < 2:
             tg_send(
                 chat_id,
-                f"⚠️ <b>Wrong format</b>\n\n"
-                f"{SEP}\n\n"
-                f"<b>Correct format:</b>\n"
-                f"<code>01712345678 your message</code>\n\n"
-                f"💡 <b>Example:</b>\n"
-                f"<code>01712345678 Hello</code>\n\n"
-                f"{SEP}\n\n"
-                f"📖 For details send /help",
+                f"⚠️ <b>Wrong format</b>\n\n{SEP}\n\n"
+                f"<b>Correct:</b>\n<code>01712345678 your message</code>\n\n"
+                f"💡 <b>Example:</b>\n<code>01712345678 Hello</code>\n\n"
+                f"{SEP}\n\n📖 Details: /help",
                 reply_markup=kb_main(),
             )
             return
