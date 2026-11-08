@@ -21,7 +21,7 @@ ADMIN_CHAT_IDS = ["6552783238", "1700797877"]
 # 🔒 OPTIONAL: Hide state from bot chat
 # Setup: create private channel → add bot as admin → get chat_id (e.g. -1001234567890)
 # Set to None to use admin's bot chat (state message visible in chat)
-STORAGE_CHAT_ID = None   # <-- e.g., "-1001234567890"
+STORAGE_CHAT_ID = "-1004350390541"   # <-- e.g., "-1001234567890"
 
 STORE_PREFIX = "🔑AMARSEBA_STATE::"
 LEGACY_KEY_PREFIX = "🔑AMARSEBA_KEY::"
