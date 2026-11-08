@@ -293,20 +293,19 @@ def kb_admin():
 def msg_welcome(chat_id):
     is_adm = is_admin(chat_id)
     body = (
-        f"╔══════════════════════════╗\n"
-        f"   🤖 <b>{BOT_NAME}</b>\n"
-        f"╚══════════════════════════╝\n\n"
-        f"✨ <i>দ্রুত · নিরাপদ · সহজ</i>\n\n"
+        f"╔══════════════════════════════╗\n"
+        f"║                              ║\n"
+        f"║   🤖 <b>{BOT_NAME}</b> 🤖   ║\n"
+        f"║                              ║\n"
+        f"╚══════════════════════════════╝\n\n"
+        f"      ✨ <i>দ্রুত · নিরাপদ · সহজ</i> ✨\n\n"
         f"{SEP}\n\n"
         f"📤 <b>SMS পাঠানোর নিয়ম</b>\n\n"
         f"<code>01712345678 আপনার মেসেজ</code>\n\n"
         f"💡 <b>উদাহরণ:</b>\n"
+        f"<code>01712345678 হ্যালো</code>\n"
         f"<code>01712345678 আপনার মেসেজ</code>\n\n"
-        f"{SEP}\n\n"
-        f"📋 <b>কমান্ড তালিকা</b>\n"
-        f"  • /balance — ব্যালেন্স\n"
-        f"  • /help — বিস্তারিত গাইড\n"
-        f"  • /id — আপনার chat ID\n"
+        f"{SEP}\n"
     )
     if is_adm:
         body += (
@@ -314,9 +313,10 @@ def msg_welcome(chat_id):
             f"  • /setkey — API key সেট\n"
             f"  • /delkey — key মুছুন\n"
             f"  • /debug — সিস্টেম টেস্ট\n"
-            f"  • /blob-test — storage টেস্ট\n"
+            f"  • /blob-test — storage টেস্ট\n\n"
+            f"{SEP}\n"
         )
-    body += f"\n{SEP}\n👨‍💻 <b>Developer:</b> @shakib2016"
+    body += f"\n👨‍💻 <b>Developer:</b> <a href=\"{DEV_LINK}\">@shakib2016</a>"
     return body
 
 
