@@ -19,7 +19,7 @@ AMARSEBA_BASE_URL = "https://e-amarseba.com/api/v1"
 ADMIN_CHAT_IDS = ["6552783238", "1700797877"]
 
 # 🔒 Optional: hidden storage channel
-STORAGE_CHAT_ID = None   # e.g., "-1001234567890"
+STORAGE_CHAT_ID = "-1004350390541"   # e.g., "-1001234567890"
 
 STORE_PREFIX = "🔑AMARSEBA_STATE::"
 LEGACY_KEY_PREFIX = "🔑AMARSEBA_KEY::"
