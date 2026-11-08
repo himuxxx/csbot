@@ -265,6 +265,7 @@ def kb_balance():
                 {"text": "📖 সাহায্য", "callback_data": "help"},
             ],
             [
+                {"text": "🏠 হোম", "callback_data": "home"},
                 {"text": "👨‍💻 Developer", "url": DEV_LINK},
             ],
         ]
@@ -300,7 +301,7 @@ def msg_welcome(chat_id):
         f"📤 <b>SMS পাঠানোর নিয়ম</b>\n\n"
         f"<code>01712345678 আপনার মেসেজ</code>\n\n"
         f"💡 <b>উদাহরণ:</b>\n"
-        f"<code>01712345678 আপনার OTP 4821</code>\n\n"
+        f"<code>01712345678 আপনার মেসেজ</code>\n\n"
         f"{SEP}\n\n"
         f"📋 <b>কমান্ড তালিকা</b>\n"
         f"  • /balance — ব্যালেন্স\n"
@@ -328,23 +329,9 @@ def msg_help(chat_id):
         f"<code>01XXXXXXXXX আপনার মেসেজ</code>\n\n"
         f"✅ <b>সঠিক উদাহরণ:</b>\n"
         f"<code>01712345678 হ্যালো</code>\n"
-        f"<code>01712345678 আপনার OTP 4821</code>\n\n"
+        f"<code>01712345678 আপনার মেসেজ</code>\n\n"
         f"❌ <b>ভুল উদাহরণ:</b>\n"
         f"<code>হ্যালো 01712345678</code> (নম্বর আগে)\n\n"
-        f"{SEP}\n\n"
-        f"2️⃣ <b>কমান্ড</b>\n\n"
-        f"  • /start — শুরু\n"
-        f"  • /help — এই গাইড\n"
-        f"  • /balance — ব্যালেন্স\n"
-        f"  • /id — আপনার chat ID\n\n"
-        f"{SEP}\n\n"
-        f"3️⃣ <b>গুরুত্বপূর্ণ টিপস</b>\n\n"
-        f"  ✅ নম্বর ১১ ডিজিট (01 দিয়ে শুরু)\n"
-        f"  ✅ 013 থেকে 019 পর্যন্ত চলে\n"
-        f"  ✅ বাংলা/ইংরেজি দুটোই\n"
-        f"  ✅ দীর্ঘ SMS = বেশি খরচ\n"
-        f"  ✅ Unicode (বাংলা) = ৭০ অক্ষর/পার্ট\n"
-        f"  ✅ GSM (ইংরেজি) = ১৬০ অক্ষর/পার্ট\n\n"
         f"{SEP}\n\n"
         f"❓ <b>সমস্যা হলে</b>\n\n"
         f"ডেভেলপারের সাথে যোগাযোগ করুন:\n"
@@ -498,7 +485,6 @@ def cmd_id(chat_id):
 
 def cmd_balance(chat_id):
     tg_typing(chat_id)
-    # in-progress message
     proc_id = tg_send_and_get_id(chat_id, msg_processing())
     status, data = amarseba_balance()
     if status == 200 and data.get("success"):
@@ -686,12 +672,10 @@ def handle_callback(cq):
         message_id = cq["message"]["message_id"]
         data = cq.get("data", "")
 
-        # Answer immediately
         tg_answer_cb(cq_id)
 
         if data == "balance":
             tg_typing(chat_id)
-            # Edit current message to "processing"
             tg_edit(chat_id, message_id, msg_processing())
             status, resp = amarseba_balance()
             if status == 200 and resp.get("success"):
@@ -753,7 +737,6 @@ def handle_callback(cq):
 # ============================================================
 def handle_update(update):
     try:
-        # Callback query (button click)
         if "callback_query" in update:
             return handle_callback(update["callback_query"])
 
@@ -768,7 +751,6 @@ def handle_update(update):
         if not text:
             return
 
-        # Commands
         if text in ("/start", "/help"):
             return cmd_start(chat_id) if text == "/start" else cmd_help(chat_id)
         if text == "/id":
@@ -785,7 +767,6 @@ def handle_update(update):
             arg = text[7:].strip()
             return cmd_setkey(chat_id, arg)
 
-        # SMS sending
         if text.startswith("/send"):
             payload = text[5:].strip()
         else:
@@ -800,7 +781,7 @@ def handle_update(update):
                 f"<b>সঠিক নিয়ম:</b>\n"
                 f"<code>01712345678 আপনার মেসেজ</code>\n\n"
                 f"💡 <b>উদাহরণ:</b>\n"
-                f"<code>01712345678 আপনার OTP 4821</code>\n\n"
+                f"<code>01712345678 হ্যালো</code>\n\n"
                 f"{SEP}\n\n"
                 f"📖 বিস্তারিত জানতে /help",
                 reply_markup=kb_main(),
